@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useForm, Controller, useWatch } from "react-hook-form";
 import {
-  Save, FilePlus, Search, ChevronLeft, ChevronRight, Edit3, Printer, FileText, Settings, LogOut,
+  Save, FilePlus, Search, ChevronLeft, ChevronRight, Edit3, Printer, FileText, Settings, LogOut, CalendarDays,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -854,6 +854,7 @@ function FormattedDateInput({ value, onChange, disabled, className }: {
   className?: string;
 }) {
   const [displayValue, setDisplayValue] = useState(formatDisplayDate(value));
+  const pickerRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setDisplayValue(formatDisplayDate(value));
@@ -870,15 +871,44 @@ function FormattedDateInput({ value, onChange, disabled, className }: {
   };
 
   return (
-    <input
-      type="text"
-      value={displayValue}
-      disabled={disabled}
-      placeholder="DD-MMM-YYYY"
-      onChange={(event) => setDisplayValue(event.target.value)}
-      onBlur={commit}
-      className={className}
-    />
+    <div className="relative">
+      <input
+        type="text"
+        value={displayValue}
+        disabled={disabled}
+        placeholder="DD-MMM-YYYY"
+        onChange={(event) => setDisplayValue(event.target.value)}
+        onBlur={commit}
+        className={`${className || ""} pr-9`}
+      />
+      <button
+        type="button"
+        disabled={disabled}
+        title="Choose date"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => {
+          const picker = pickerRef.current;
+          if (!picker) return;
+          if (typeof picker.showPicker === "function") picker.showPicker();
+          else picker.click();
+        }}
+        className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center text-current opacity-70 hover:opacity-100 disabled:hidden"
+      >
+        <CalendarDays className="w-4 h-4" />
+      </button>
+      <input
+        ref={pickerRef}
+        type="date"
+        value={value || ""}
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={(event) => {
+          onChange(event.target.value);
+          setDisplayValue(formatDisplayDate(event.target.value));
+        }}
+        className="absolute right-1 top-1/2 w-1 h-1 opacity-0 pointer-events-none"
+      />
+    </div>
   );
 }
 
