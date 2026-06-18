@@ -452,6 +452,9 @@ async function updateSupabaseTiRecord(
   if (record.ti_no !== nextTiNo) {
     throw new Error(`TI number was not changed to ${nextTiNo}`);
   }
+  if (nextTiNo !== tiNo) {
+    await rpc<number>("sync_ti_counter_from_records");
+  }
   return record;
 }
 
