@@ -87,6 +87,7 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
   const [itemModalMode, setItemModalMode] = useState<"create" | "edit">("create");
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const pendingItemFocusRef = useRef<string | null>(null);
+  const lastCoreColumnRef = useRef("2");
 
   // Debounced TI number for duplicate checking
   const [debouncedTiNo, setDebouncedTiNo] = useState("");
@@ -368,6 +369,62 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
     });
   };
 
+  const focusNextFormField = (current: HTMLElement, backwards = false) => {
+    const gridRow = current.getAttribute("data-grid-row");
+    const gridCol = current.getAttribute("data-grid-col");
+    if (gridRow !== null && gridCol !== null) {
+      lastCoreColumnRef.current = gridCol;
+      const nextGridField = document.querySelector<HTMLElement>(
+        `#ti-form [data-grid-row="${Number(gridRow) + (backwards ? -1 : 1)}"][data-grid-col="${gridCol}"]`
+      );
+      if (nextGridField && nextGridField.offsetParent !== null && !nextGridField.hasAttribute("disabled")) {
+        focusAndReveal(nextGridField);
+        return;
+      }
+
+      if (!backwards) {
+        const nextSectionField = document.querySelector<HTMLElement>(
+          '#ti-form [data-field="ct_final_dim"]'
+        );
+        focusAndReveal(nextSectionField);
+        return;
+      }
+    }
+
+    const fields = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '#ti-form input:not([disabled]):not([type="checkbox"]), #ti-form textarea:not([disabled]), #ti-form select:not([disabled])'
+      )
+    ).filter((field) => field.offsetParent !== null);
+    const currentIndex = fields.indexOf(current);
+    const nextIndex = currentIndex + (backwards ? -1 : 1);
+    if (currentIndex >= 0 && nextIndex >= 0 && nextIndex < fields.length) {
+      focusAndReveal(fields[nextIndex]);
+    }
+  };
+
+  const handleFormKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (e.key === "Tab" && target.getAttribute("data-field") === "ct_final_dim" && e.shiftKey) {
+      e.preventDefault();
+      const lastCoreField = document.querySelector<HTMLElement>(
+        `#ti-form [data-grid-row="${CORE_FIELDS.length - 1}"][data-grid-col="${lastCoreColumnRef.current}"]`
+      );
+      focusAndReveal(lastCoreField);
+      return;
+    }
+    if (e.key === "Tab" && target.hasAttribute("data-grid-row")) {
+      e.preventDefault();
+      focusNextFormField(target, e.shiftKey);
+      return;
+    }
+    if (e.key !== "Enter" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (target.tagName.toLowerCase() === "textarea") return;
+    if (!target.matches('input:not([type="checkbox"]), select')) return;
+    e.preventDefault();
+    focusNextFormField(target);
+  };
+
   const handleFormFocus = (e: React.FocusEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
     const tag = target.tagName.toLowerCase();
@@ -394,7 +451,7 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
       </div>
 
       {/* Main */}
-      <div id="ti-form" onFocusCapture={handleFormFocus} className="ml-[60px] flex-1 p-6 flex justify-center">
+      <div id="ti-form" onFocusCapture={handleFormFocus} onKeyDown={handleFormKeyDown} className="ml-[60px] flex-1 p-6 flex justify-center">
         <div className="w-full max-w-5xl bg-white shadow-lg border border-gray-200">
           {/* Header */}
           <div className="bg-gradient-to-r from-[#3b5fc0] to-[#6b8dd6] p-6 text-white flex justify-between items-center">
@@ -737,7 +794,6 @@ function AutocompleteField({ form, name, label, options, disabled, required, err
           onKeyDown={e => {
             if (e.key === "Enter" && open && filtered.length === 1) {
               e.preventDefault();
-              e.stopPropagation();
               form.setValue(name, filtered[0], { shouldDirty: true });
               setQuery(filtered[0]);
               setOpen(false);
@@ -802,7 +858,6 @@ function SuggestionField({ form, name, label, fetchField, disabled, required, er
           onKeyDown={e => {
             if (e.key === "Enter" && open && filtered.length === 1) {
               e.preventDefault();
-              e.stopPropagation();
               form.setValue(name, filtered[0], { shouldDirty: true });
               setOpen(false);
             }
