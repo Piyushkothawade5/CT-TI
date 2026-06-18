@@ -1,6 +1,7 @@
 import React from "react";
 import { Document, Page, View, Text, Image, StyleSheet } from "@react-pdf/renderer";
 import type { TiRecordInput, CoreData } from "@/api-client";
+import { formatDisplayDate } from "@/lib/date-format";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS — fixed A4 layout, mathematically fitted
@@ -220,12 +221,7 @@ const s = StyleSheet.create({
 function v(val?: string | null): string { return val ?? ""; }
 
 function formatDate(dateStr?: string | null): string {
-  if (!dateStr) return "";
-  try {
-    const d = new Date(dateStr + "T00:00:00");
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    return `${String(d.getDate()).padStart(2,"0")}-${months[d.getMonth()]}-${d.getFullYear()}`;
-  } catch { return dateStr; }
+  return formatDisplayDate(dateStr);
 }
 
 /**
