@@ -537,7 +537,7 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
                     value={field.value || ""}
                     onChange={field.onChange}
                     disabled={!isEditMode && !isNewMode}
-                    className="w-32 bg-transparent border border-white/30 rounded px-2 py-1 text-sm outline-none text-white placeholder:text-blue-100/60 disabled:opacity-80"
+                    className="w-40 bg-transparent border border-white/30 rounded px-3 py-1 text-sm outline-none text-white placeholder:text-blue-100/60 disabled:opacity-90"
                   />
                 )} />
               </div>
@@ -879,7 +879,7 @@ function FormattedDateInput({ value, onChange, disabled, className }: {
         placeholder="DD-MMM-YYYY"
         onChange={(event) => setDisplayValue(event.target.value)}
         onBlur={commit}
-        className={`${className || ""} pr-9`}
+        className={`${className || ""} ${disabled ? "" : "pr-9"}`}
       />
       <button
         type="button"
