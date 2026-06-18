@@ -81,6 +81,7 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
   // CT Type autocomplete state
   const [ctTypeOpen, setCtTypeOpen] = React.useState(false);
   const [ctQuery, setCtQuery] = React.useState("");
+  const [ctActiveIndex, setCtActiveIndex] = React.useState(-1);
   const ctRef = React.useRef<HTMLDivElement>(null);
   const lastCoreColumnRef = React.useRef("2");
   React.useEffect(() => {
@@ -89,6 +90,14 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
     return () => document.removeEventListener("mousedown", h);
   }, []);
   const filteredCtTypes = distinctCtTypes.filter(t => !ctQuery || t.toLowerCase().includes(ctQuery.toLowerCase()));
+  React.useEffect(() => {
+    setCtActiveIndex(filteredCtTypes.length ? 0 : -1);
+  }, [ctQuery, ctTypeOpen, filteredCtTypes.length]);
+  React.useEffect(() => {
+    ctRef.current
+      ?.querySelector<HTMLElement>(`[data-dropdown-index="${ctActiveIndex}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [ctActiveIndex]);
 
   const handleEnterNavigation = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
@@ -183,10 +192,24 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
                       onBlur={() => setTimeout(() => setCtTypeOpen(false), 100)}
                       onChange={e => { field.onChange(e.target.value); setCtQuery(e.target.value); setCtTypeOpen(true); }}
                       onKeyDown={e => {
-                        if (e.key === "Enter" && ctTypeOpen && filteredCtTypes.length === 1) {
+                        if (e.key === "ArrowDown" && filteredCtTypes.length) {
                           e.preventDefault();
-                          form.setValue("ct_type", filteredCtTypes[0]);
-                          setCtQuery(filteredCtTypes[0]);
+                          e.stopPropagation();
+                          setCtTypeOpen(true);
+                          setCtActiveIndex(index => index < filteredCtTypes.length - 1 ? index + 1 : 0);
+                        } else if (e.key === "ArrowUp" && filteredCtTypes.length) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setCtTypeOpen(true);
+                          setCtActiveIndex(index => index > 0 ? index - 1 : filteredCtTypes.length - 1);
+                        } else if (e.key === "Enter" && ctTypeOpen && ctActiveIndex >= 0 && filteredCtTypes[ctActiveIndex]) {
+                          e.preventDefault();
+                          form.setValue("ct_type", filteredCtTypes[ctActiveIndex]);
+                          setCtQuery(filteredCtTypes[ctActiveIndex]);
+                          setCtTypeOpen(false);
+                        } else if (e.key === "Escape") {
+                          e.preventDefault();
+                          e.stopPropagation();
                           setCtTypeOpen(false);
                         }
                       }}
@@ -194,10 +217,14 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
                   )} />
                   {ctTypeOpen && filteredCtTypes.length > 0 && (
                     <ul className="absolute z-50 mt-0.5 w-full bg-white border border-gray-200 rounded-md shadow-lg max-h-40 overflow-y-auto text-sm">
-                      {filteredCtTypes.map(opt => (
+                      {filteredCtTypes.map((opt, index) => (
                         <li key={opt}
+                          data-dropdown-index={index}
                           onMouseDown={e => { e.preventDefault(); form.setValue("ct_type", opt); setCtQuery(opt); setCtTypeOpen(false); }}
-                          className="px-3 py-1.5 cursor-pointer hover:bg-[#4a6fa5]/10">
+                          onMouseEnter={() => setCtActiveIndex(index)}
+                          className={`px-3 py-1.5 cursor-pointer ${
+                            index === ctActiveIndex ? "bg-[#4a6fa5] text-white" : "hover:bg-[#4a6fa5]/10"
+                          }`}>
                           {opt}
                         </li>
                       ))}
