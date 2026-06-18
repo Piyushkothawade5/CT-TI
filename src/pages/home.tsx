@@ -373,8 +373,12 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
         toast({ title: "Record updated successfully" });
       }
       setFormErrors({});
-    } catch {
-      toast({ variant: "destructive", title: "Error saving record" });
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Error saving record",
+        description: error instanceof Error ? error.message : String(error),
+      });
     }
   };
 
