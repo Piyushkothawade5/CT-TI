@@ -547,6 +547,27 @@ export async function getCustomerForItemAsync(itemNo: string): Promise<string> {
   return item.default_customer || "";
 }
 
+export async function getFirstTiForItemCustomerAsync(
+  itemNo: string,
+  customerName: string
+): Promise<string> {
+  const cleanedItemNo = cleanItemNo(itemNo);
+  const normalizedCustomer = normalizeCustomer(customerName);
+  if (!cleanedItemNo || !normalizedCustomer) return "";
+
+  const records = isSupabaseConfigured
+    ? await supabaseFetch<TiRecord[]>(
+        `ct_ti_records?item_no=eq.${eqFilter(cleanedItemNo)}&customer_name=eq.${eqFilter(normalizedCustomer)}&select=ti_no`
+      )
+    : getTiRecords().filter(
+        (record) =>
+          cleanItemNo(record.item_no || "") === cleanedItemNo &&
+          normalizeCustomer(record.customer_name) === normalizedCustomer
+      );
+
+  return [...records].sort(compareTiNumbers)[0]?.ti_no || "";
+}
+
 export function useGetItem(
   itemNo: string,
   options?: { query?: { enabled?: boolean; retry?: boolean } }
