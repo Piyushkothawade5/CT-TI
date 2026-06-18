@@ -432,6 +432,13 @@ async function updateSupabaseTiRecord(
 ): Promise<TiRecord> {
   if (!tiNo) throw new Error("TI number is required");
   const nextTiNo = data.ti_no?.trim() || tiNo;
+  if (nextTiNo !== tiNo) {
+    const duplicate = await supabaseFetch<TiRecord[]>(
+      `ct_ti_records?ti_no=eq.${eqFilter(nextTiNo)}&select=ti_no&limit=1`
+    );
+    if (duplicate.length) throw new Error(`TI number already exists: ${nextTiNo}`);
+  }
+
   const rows = await supabaseFetch<TiRecord[]>(
     `ct_ti_records?ti_no=eq.${eqFilter(tiNo)}`,
     {
@@ -442,6 +449,9 @@ async function updateSupabaseTiRecord(
   );
   const record = rows[0];
   if (!record) throw new Error("TI record not found");
+  if (record.ti_no !== nextTiNo) {
+    throw new Error(`TI number was not changed to ${nextTiNo}`);
+  }
   return record;
 }
 
@@ -789,12 +799,13 @@ export function useUpdateTiRecord() {
       return records[idx];
     },
     onSuccess: (record, variables) => {
+      queryClient.removeQueries({
+        queryKey: getGetTiRecordQueryKey(variables.tiNo || ""),
+      });
+      queryClient.setQueryData(getGetTiRecordQueryKey(record.ti_no), record);
       queryClient.invalidateQueries({ queryKey: ["ti-records"] });
       queryClient.invalidateQueries({ queryKey: ["distinct-ti"] });
       queryClient.invalidateQueries({ queryKey: ["ti-adjacent"] });
-      queryClient.invalidateQueries({
-        queryKey: getGetTiRecordQueryKey(variables.tiNo || ""),
-      });
       queryClient.invalidateQueries({
         queryKey: getGetTiRecordQueryKey(record.ti_no),
       });
