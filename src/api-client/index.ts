@@ -431,12 +431,13 @@ async function updateSupabaseTiRecord(
   data: TiRecordInput
 ): Promise<TiRecord> {
   if (!tiNo) throw new Error("TI number is required");
+  const nextTiNo = data.ti_no?.trim() || tiNo;
   const rows = await supabaseFetch<TiRecord[]>(
     `ct_ti_records?ti_no=eq.${eqFilter(tiNo)}`,
     {
       method: "PATCH",
       prefer: "return=representation",
-      body: JSON.stringify({ ...normalizeTiInput(data), ti_no: tiNo }),
+      body: JSON.stringify({ ...normalizeTiInput(data), ti_no: nextTiNo }),
     }
   );
   const record = rows[0];
@@ -779,15 +780,23 @@ export function useUpdateTiRecord() {
       const records = getTiRecords();
       const idx = records.findIndex((r) => r.ti_no === tiNo);
       if (idx === -1) throw new Error("TI record not found");
-      records[idx] = { ...records[idx], ...normalizeTiInput(data), ti_no: tiNo! };
+      const nextTiNo = data.ti_no?.trim() || tiNo!;
+      if (nextTiNo !== tiNo && records.some((record) => record.ti_no === nextTiNo)) {
+        throw new Error("TI number already exists");
+      }
+      records[idx] = { ...records[idx], ...normalizeTiInput(data), ti_no: nextTiNo };
       setTiRecords(records);
       return records[idx];
     },
-    onSuccess: (_data, variables) => {
+    onSuccess: (record, variables) => {
       queryClient.invalidateQueries({ queryKey: ["ti-records"] });
       queryClient.invalidateQueries({ queryKey: ["distinct-ti"] });
+      queryClient.invalidateQueries({ queryKey: ["ti-adjacent"] });
       queryClient.invalidateQueries({
         queryKey: getGetTiRecordQueryKey(variables.tiNo || ""),
+      });
+      queryClient.invalidateQueries({
+        queryKey: getGetTiRecordQueryKey(record.ti_no),
       });
     },
   });
