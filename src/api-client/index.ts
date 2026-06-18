@@ -627,6 +627,27 @@ export function useGetTiRecord(
   });
 }
 
+export function useTiNumberExists(
+  tiNo: string,
+  options?: { query?: { enabled?: boolean } }
+) {
+  return useQuery({
+    queryKey: ["ti-number-exists", tiNo],
+    queryFn: async () => {
+      if (isSupabaseConfigured) {
+        const rows = await supabaseFetch<Array<Pick<TiRecord, "ti_no">>>(
+          `ct_ti_records?ti_no=eq.${eqFilter(tiNo)}&select=ti_no&limit=1`
+        );
+        return rows.length > 0;
+      }
+      return getTiRecords().some((record) => record.ti_no === tiNo);
+    },
+    enabled: options?.query?.enabled !== false && !!tiNo,
+    retry: false,
+    staleTime: 0,
+  });
+}
+
 export function useGetAdjacentTiRecords(
   tiNo: string,
   options?: { query?: { enabled?: boolean } }
@@ -763,6 +784,7 @@ export function useCreateTiRecord() {
       return newRecord;
     },
     onSuccess: (record) => {
+      queryClient.removeQueries({ queryKey: ["ti-number-exists"] });
       queryClient.invalidateQueries({ queryKey: ["ti-records"] });
       queryClient.invalidateQueries({ queryKey: ["distinct-ti"] });
       queryClient.invalidateQueries({ queryKey: ["distinct-ct-types"] });
@@ -799,6 +821,7 @@ export function useUpdateTiRecord() {
       return records[idx];
     },
     onSuccess: (record, variables) => {
+      queryClient.removeQueries({ queryKey: ["ti-number-exists"] });
       queryClient.removeQueries({
         queryKey: getGetTiRecordQueryKey(variables.tiNo || ""),
       });
