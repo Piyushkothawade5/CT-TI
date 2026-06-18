@@ -82,12 +82,74 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
   const [ctTypeOpen, setCtTypeOpen] = React.useState(false);
   const [ctQuery, setCtQuery] = React.useState("");
   const ctRef = React.useRef<HTMLDivElement>(null);
+  const lastCoreColumnRef = React.useRef("2");
   React.useEffect(() => {
     const h = (e: MouseEvent) => { if (ctRef.current && !ctRef.current.contains(e.target as Node)) setCtTypeOpen(false); };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, []);
   const filteredCtTypes = distinctCtTypes.filter(t => !ctQuery || t.toLowerCase().includes(ctQuery.toLowerCase()));
+
+  const handleEnterNavigation = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (e.key === "Tab" && target.getAttribute("data-field") === "ct_final_dim" && e.shiftKey) {
+      e.preventDefault();
+      const lastCoreField = document.querySelector<HTMLElement>(
+        `#add-item-form [data-grid-row="${CORE_FIELDS.length - 1}"][data-grid-col="${lastCoreColumnRef.current}"]`
+      );
+      lastCoreField?.focus();
+      lastCoreField?.scrollIntoView({ block: "center", behavior: "smooth" });
+      return;
+    }
+    if (e.key !== "Enter" && e.key !== "Tab") return;
+    if (e.key === "Enter" && (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey)) return;
+    if (target.tagName.toLowerCase() === "textarea") return;
+    if (!target.matches('input:not([type="checkbox"]), select')) return;
+
+    const gridRow = target.getAttribute("data-grid-row");
+    const gridCol = target.getAttribute("data-grid-col");
+    if (gridRow !== null && gridCol !== null) {
+      lastCoreColumnRef.current = gridCol;
+      e.preventDefault();
+      const nextGridField = document.querySelector<HTMLElement>(
+        `#add-item-form [data-grid-row="${Number(gridRow) + (e.shiftKey ? -1 : 1)}"][data-grid-col="${gridCol}"]`
+      );
+      const nextField =
+        nextGridField && nextGridField.offsetParent !== null
+          ? nextGridField
+          : e.shiftKey
+            ? null
+            : document.querySelector<HTMLElement>('#add-item-form [data-field="ct_final_dim"]');
+      if (nextField) {
+        nextField.focus();
+        nextField.scrollIntoView({ block: "center", behavior: "smooth" });
+      } else if (e.shiftKey) {
+        const fields = Array.from(
+          document.querySelectorAll<HTMLElement>(
+            '#add-item-form input:not([disabled]):not([type="checkbox"]), #add-item-form textarea:not([disabled]), #add-item-form select:not([disabled])'
+          )
+        ).filter((field) => field.offsetParent !== null);
+        const currentIndex = fields.indexOf(target);
+        fields[currentIndex - 1]?.focus();
+        fields[currentIndex - 1]?.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+      return;
+    }
+
+    if (e.key === "Tab") return;
+
+    const fields = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '#add-item-form input:not([disabled]):not([type="checkbox"]), #add-item-form textarea:not([disabled]), #add-item-form select:not([disabled])'
+      )
+    ).filter((field) => field.offsetParent !== null);
+    const currentIndex = fields.indexOf(target);
+    if (currentIndex < 0 || currentIndex >= fields.length - 1) return;
+
+    e.preventDefault();
+    fields[currentIndex + 1].focus();
+    fields[currentIndex + 1].scrollIntoView({ block: "center", behavior: "smooth" });
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -100,7 +162,7 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto p-6 bg-gray-50/50">
-          <div id="add-item-form" className="space-y-8 pb-6">
+          <div id="add-item-form" onKeyDown={handleEnterNavigation} className="space-y-8 pb-6">
 
             <section>
               <h3 className="text-[#4a6fa5] font-bold tracking-wide text-sm mb-4 border-l-4 border-[#4a6fa5] pl-3">BASIC DETAILS</h3>
@@ -123,7 +185,6 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
                       onKeyDown={e => {
                         if (e.key === "Enter" && ctTypeOpen && filteredCtTypes.length === 1) {
                           e.preventDefault();
-                          e.stopPropagation();
                           form.setValue("ct_type", filteredCtTypes[0]);
                           setCtQuery(filteredCtTypes[0]);
                           setCtTypeOpen(false);
