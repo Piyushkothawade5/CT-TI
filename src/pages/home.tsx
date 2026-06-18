@@ -138,17 +138,17 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
   useEffect(() => {
     let cancelled = false;
     if (!isNewMode || !watchedItemNo || !watchedCustomerName) {
-      if (isNewMode) form.setValue("rev_no", "");
+      if (isNewMode) form.setValue("ref_ti", "");
       return;
     }
 
     const timer = window.setTimeout(() => {
       getFirstTiForItemCustomerAsync(watchedItemNo, watchedCustomerName)
         .then((firstTiNo) => {
-          if (!cancelled) form.setValue("rev_no", firstTiNo);
+          if (!cancelled) form.setValue("ref_ti", firstTiNo);
         })
         .catch(() => {
-          if (!cancelled) form.setValue("rev_no", "");
+          if (!cancelled) form.setValue("ref_ti", "");
         });
     }, 250);
 
