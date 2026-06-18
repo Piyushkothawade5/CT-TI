@@ -113,7 +113,10 @@ type ListFilters = {
   itemNo?: string;
   customer?: string;
   woNo?: string;
+  cusOrderNo?: string;
   ctType?: string;
+  dateFrom?: string;
+  dateTo?: string;
 };
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.replace(/\/$/, "") || "";
@@ -463,10 +466,21 @@ function filterTiRecords(records: TiRecord[], filters: ListFilters): TiRecord[] 
       r.wo_number?.toLowerCase().includes(filters.woNo!.toLowerCase())
     );
   }
+  if (filters.cusOrderNo) {
+    filtered = filtered.filter((r) =>
+      r.cus_order_no?.toLowerCase().includes(filters.cusOrderNo!.toLowerCase())
+    );
+  }
   if (filters.ctType) {
     filtered = filtered.filter((r) =>
       r.ct_type?.toLowerCase().includes(filters.ctType!.toLowerCase())
     );
+  }
+  if (filters.dateFrom) {
+    filtered = filtered.filter((r) => !!r.ti_date && r.ti_date >= filters.dateFrom!);
+  }
+  if (filters.dateTo) {
+    filtered = filtered.filter((r) => !!r.ti_date && r.ti_date <= filters.dateTo!);
   }
   return filtered.sort((a, b) => compareTiNumbers(b, a));
 }
