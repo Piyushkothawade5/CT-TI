@@ -789,6 +789,7 @@ function AutocompleteField({ form, name, label, options, disabled, required, err
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(-1);
   const containerRef = useRef<HTMLDivElement>(null);
   const fieldValue = useWatch({ control: form.control, name });
 
@@ -796,6 +797,16 @@ function AutocompleteField({ form, name, label, options, disabled, required, err
   useEffect(() => { setQuery(fieldValue || ""); }, [fieldValue]);
 
   const filtered = options.filter(o => !query || o.toLowerCase().includes(query.toLowerCase()));
+
+  useEffect(() => {
+    setActiveIndex(filtered.length ? 0 : -1);
+  }, [query, open, filtered.length]);
+
+  useEffect(() => {
+    containerRef.current
+      ?.querySelector<HTMLElement>(`[data-dropdown-index="${activeIndex}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -818,10 +829,24 @@ function AutocompleteField({ form, name, label, options, disabled, required, err
           onBlur={() => setTimeout(() => setOpen(false), 100)}
           onChange={e => { field.onChange(e.target.value); setQuery(e.target.value); setOpen(true); }}
           onKeyDown={e => {
-            if (e.key === "Enter" && open && filtered.length === 1) {
+            if (e.key === "ArrowDown" && filtered.length) {
               e.preventDefault();
-              form.setValue(name, filtered[0], { shouldDirty: true });
-              setQuery(filtered[0]);
+              e.stopPropagation();
+              setOpen(true);
+              setActiveIndex(index => index < filtered.length - 1 ? index + 1 : 0);
+            } else if (e.key === "ArrowUp" && filtered.length) {
+              e.preventDefault();
+              e.stopPropagation();
+              setOpen(true);
+              setActiveIndex(index => index > 0 ? index - 1 : filtered.length - 1);
+            } else if (e.key === "Enter" && open && activeIndex >= 0 && filtered[activeIndex]) {
+              e.preventDefault();
+              form.setValue(name, filtered[activeIndex], { shouldDirty: true });
+              setQuery(filtered[activeIndex]);
+              setOpen(false);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
               setOpen(false);
             }
           }}
@@ -830,10 +855,14 @@ function AutocompleteField({ form, name, label, options, disabled, required, err
       {error && <p className="text-red-500 text-xs mt-0.5">{error}</p>}
       {open && !disabled && filtered.length > 0 && (
         <ul className="absolute z-50 mt-0.5 w-full bg-white border border-gray-200 rounded-md shadow-lg max-h-44 overflow-y-auto text-sm">
-          {filtered.map(opt => (
+          {filtered.map((opt, index) => (
             <li key={opt}
+              data-dropdown-index={index}
               onMouseDown={e => { e.preventDefault(); form.setValue(name, opt, { shouldDirty: true }); setQuery(opt); setOpen(false); }}
-              className="px-3 py-1.5 cursor-pointer hover:bg-[#4a6fa5]/10 hover:text-[#2a4080] transition-colors">
+              onMouseEnter={() => setActiveIndex(index)}
+              className={`px-3 py-1.5 cursor-pointer transition-colors ${
+                index === activeIndex ? "bg-[#4a6fa5] text-white" : "hover:bg-[#4a6fa5]/10 hover:text-[#2a4080]"
+              }`}>
               {opt}
             </li>
           ))}
@@ -854,12 +883,23 @@ function SuggestionField({ form, name, label, fetchField, disabled, required, er
 }) {
   const { data: allValues = [] } = useDistinctTiValues(fetchField);
   const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const containerRef = useRef<HTMLDivElement>(null);
   const currentValue: string = useWatch({ control: form.control, name }) || "";
 
   const filtered = currentValue.length >= 3
     ? allValues.filter(v => v.toLowerCase().includes(currentValue.toLowerCase()))
     : [];
+
+  useEffect(() => {
+    setActiveIndex(filtered.length ? 0 : -1);
+  }, [currentValue, open, filtered.length]);
+
+  useEffect(() => {
+    containerRef.current
+      ?.querySelector<HTMLElement>(`[data-dropdown-index="${activeIndex}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -882,9 +922,23 @@ function SuggestionField({ form, name, label, fetchField, disabled, required, er
           onFocus={() => { if (currentValue.length >= 3) setOpen(true); }}
           onBlur={() => setTimeout(() => setOpen(false), 100)}
           onKeyDown={e => {
-            if (e.key === "Enter" && open && filtered.length === 1) {
+            if (e.key === "ArrowDown" && filtered.length) {
               e.preventDefault();
-              form.setValue(name, filtered[0], { shouldDirty: true });
+              e.stopPropagation();
+              setOpen(true);
+              setActiveIndex(index => index < filtered.length - 1 ? index + 1 : 0);
+            } else if (e.key === "ArrowUp" && filtered.length) {
+              e.preventDefault();
+              e.stopPropagation();
+              setOpen(true);
+              setActiveIndex(index => index > 0 ? index - 1 : filtered.length - 1);
+            } else if (e.key === "Enter" && open && activeIndex >= 0 && filtered[activeIndex]) {
+              e.preventDefault();
+              form.setValue(name, filtered[activeIndex], { shouldDirty: true });
+              setOpen(false);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
               setOpen(false);
             }
           }}
@@ -893,10 +947,14 @@ function SuggestionField({ form, name, label, fetchField, disabled, required, er
       {error && <p className="text-red-500 text-xs mt-0.5">{error}</p>}
       {open && !disabled && filtered.length > 0 && (
         <ul className="absolute z-50 mt-0.5 w-full bg-white border border-gray-200 rounded-md shadow-lg max-h-44 overflow-y-auto text-sm">
-          {filtered.map(opt => (
+          {filtered.map((opt, index) => (
             <li key={opt}
+              data-dropdown-index={index}
               onMouseDown={e => { e.preventDefault(); form.setValue(name, opt, { shouldDirty: true }); setOpen(false); }}
-              className="px-3 py-1.5 cursor-pointer hover:bg-[#4a6fa5]/10 hover:text-[#2a4080] transition-colors">
+              onMouseEnter={() => setActiveIndex(index)}
+              className={`px-3 py-1.5 cursor-pointer transition-colors ${
+                index === activeIndex ? "bg-[#4a6fa5] text-white" : "hover:bg-[#4a6fa5]/10 hover:text-[#2a4080]"
+              }`}>
               {opt}
             </li>
           ))}
