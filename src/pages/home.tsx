@@ -10,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   useGetItem, useGetTiRecord, useGenerateTiNumber, useGetAdjacentTiRecords,
   useUpdateTiRecord, useCreateTiRecord, getGetItemQueryKey, getGetTiRecordQueryKey,
-  useDistinctTiValues, useDistinctCtTypes, getCustomerForItemAsync,
+  useDistinctTiValues, useDistinctCtTypes, getCustomerForItemAsync, useTiNumberExists,
   getFirstTiForItemCustomerAsync,
 } from "@/api-client";
 import type { TiRecordInput, CoreData } from "@/api-client";
@@ -119,10 +119,9 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
   const { data: adjacentData } = useGetAdjacentTiRecords(navigationTiNo, {
     query: { enabled: !!navigationTiNo },
   });
-  const { data: duplicateTiData } = useGetTiRecord(debouncedTiNo, {
-    query: { enabled: !!debouncedTiNo && (isNewMode || isEditMode), retry: false },
+  const { data: isDuplicateTiNo = false } = useTiNumberExists(debouncedTiNo, {
+    query: { enabled: !!debouncedTiNo && (isNewMode || isEditMode) },
   });
-  const isDuplicateTiNo = !!duplicateTiData;
 
   const generateTiMutation = useGenerateTiNumber();
   const createTiMutation = useCreateTiRecord();
