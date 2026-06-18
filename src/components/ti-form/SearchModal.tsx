@@ -1,10 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useDistinctCtTypes, useListTiRecords } from "@/api-client";
-import { Download, Eye, Pencil, RotateCcw, Search } from "lucide-react";
+import { CalendarDays, Download, Eye, Pencil, RotateCcw, Search } from "lucide-react";
 import { downloadTiPdf } from "@/components/ti-form/downloadTiPdf";
 import { useToast } from "@/hooks/use-toast";
 import { formatDisplayDate, parseDisplayDate } from "@/lib/date-format";
@@ -249,6 +249,7 @@ function DateSearchField({
   onChange: (value: string) => void;
 }) {
   const [displayValue, setDisplayValue] = useState(formatDisplayDate(value));
+  const pickerRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setDisplayValue(formatDisplayDate(value));
@@ -267,18 +268,46 @@ function DateSearchField({
   return (
     <div className="space-y-1.5">
       <Label className="text-xs uppercase text-gray-500">{label}</Label>
-      <Input
-        value={displayValue}
-        placeholder="DD-MMM-YYYY"
-        onChange={(event) => {
-          const nextDisplayValue = event.target.value;
-          setDisplayValue(nextDisplayValue);
-          const parsed = parseDisplayDate(nextDisplayValue);
-          if (parsed !== null) onChange(parsed);
-        }}
-        onBlur={commit}
-        className="h-10 bg-white border-gray-300 shadow-sm focus-visible:ring-2 focus-visible:ring-[#4a6fa5]/20 focus-visible:border-[#4a6fa5]"
-      />
+      <div className="relative">
+        <Input
+          value={displayValue}
+          placeholder="DD-MMM-YYYY"
+          onChange={(event) => {
+            const nextDisplayValue = event.target.value;
+            setDisplayValue(nextDisplayValue);
+            const parsed = parseDisplayDate(nextDisplayValue);
+            if (parsed !== null) onChange(parsed);
+          }}
+          onBlur={commit}
+          className="h-10 pr-9 bg-white border-gray-300 shadow-sm focus-visible:ring-2 focus-visible:ring-[#4a6fa5]/20 focus-visible:border-[#4a6fa5]"
+        />
+        <button
+          type="button"
+          title="Choose date"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            const picker = pickerRef.current;
+            if (!picker) return;
+            if (typeof picker.showPicker === "function") picker.showPicker();
+            else picker.click();
+          }}
+          className="absolute right-1 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center text-gray-500 hover:text-[#2a4080]"
+        >
+          <CalendarDays className="w-4 h-4" />
+        </button>
+        <input
+          ref={pickerRef}
+          type="date"
+          value={value}
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(event) => {
+            onChange(event.target.value);
+            setDisplayValue(formatDisplayDate(event.target.value));
+          }}
+          className="absolute right-1 top-1/2 w-1 h-1 opacity-0 pointer-events-none"
+        />
+      </div>
     </div>
   );
 }
