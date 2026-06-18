@@ -79,6 +79,7 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
 
   const [draftTiNo, setDraftTiNo] = useState("");
   const [currentTiNo, setCurrentTiNo] = useState<string | null>(null);
+  const [editedTiNo, setEditedTiNo] = useState("");
   const [isEditMode, setIsEditMode] = useState(false);
   const [isNewMode, setIsNewMode] = useState(true);
   const [itemNoInput, setItemNoInput] = useState("");
@@ -94,10 +95,14 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
   // Debounced TI number for duplicate checking
   const [debouncedTiNo, setDebouncedTiNo] = useState("");
   useEffect(() => {
-    if (!isNewMode || !draftTiNo) { setDebouncedTiNo(""); return; }
-    const t = setTimeout(() => setDebouncedTiNo(draftTiNo), 400);
+    const candidateTiNo = isNewMode ? draftTiNo : isEditMode ? editedTiNo : "";
+    if (!candidateTiNo || candidateTiNo === currentTiNo) {
+      setDebouncedTiNo("");
+      return;
+    }
+    const t = setTimeout(() => setDebouncedTiNo(candidateTiNo.trim()), 400);
     return () => clearTimeout(t);
-  }, [draftTiNo, isNewMode]);
+  }, [currentTiNo, draftTiNo, editedTiNo, isEditMode, isNewMode]);
 
   // ── Distinct value hooks for dropdowns ──────────────────────────────────────
   const { data: distinctCustomers = [] } = useDistinctTiValues("customer_name");
@@ -115,7 +120,7 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
     query: { enabled: !!navigationTiNo },
   });
   const { data: duplicateTiData } = useGetTiRecord(debouncedTiNo, {
-    query: { enabled: !!debouncedTiNo && isNewMode, retry: false },
+    query: { enabled: !!debouncedTiNo && (isNewMode || isEditMode), retry: false },
   });
   const isDuplicateTiNo = !!duplicateTiData;
 
@@ -224,6 +229,7 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
       pendingSearchEditRef.current = null;
       setIsNewMode(false);
       setIsEditMode(shouldOpenInEditMode);
+      setEditedTiNo(tiRecordData.ti_no);
       setItemNoInput(tiRecordData.item_no || "");
       setActiveItemNo(tiRecordData.item_no || "");
       form.reset(tiRecordData);
@@ -283,6 +289,7 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
   const handleNew = async () => {
     setCurrentTiNo(null);
     setDraftTiNo("");
+    setEditedTiNo("");
     setIsNewMode(true);
     setIsEditMode(true);
     setItemNoInput("");
@@ -305,7 +312,10 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
   };
 
   const handleEdit = () => {
-    if (currentTiNo) setIsEditMode(true);
+    if (currentTiNo) {
+      setEditedTiNo(currentTiNo);
+      setIsEditMode(true);
+    }
   };
 
   const handleEditItem = () => {
@@ -317,7 +327,8 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
   const handleSave = async () => {
     if (!isFormEnabled) return;
     if (isDuplicateTiNo) {
-      toast({ variant: "destructive", title: "TI number already exists", description: `${draftTiNo} is already in use.` });
+      const duplicateNumber = isNewMode ? draftTiNo : editedTiNo;
+      toast({ variant: "destructive", title: "TI number already exists", description: `${duplicateNumber} is already in use.` });
       return;
     }
     const data = form.getValues();
@@ -345,7 +356,17 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
         saveSignatures(sigs);
         toast({ title: "Record saved successfully" });
       } else if (currentTiNo) {
-        await updateTiMutation.mutateAsync({ tiNo: currentTiNo, data });
+        const nextTiNo = editedTiNo.trim();
+        if (!nextTiNo) {
+          toast({ variant: "destructive", title: "TI number is required" });
+          return;
+        }
+        const updated = await updateTiMutation.mutateAsync({
+          tiNo: currentTiNo,
+          data: { ...data, ti_no: nextTiNo },
+        });
+        setCurrentTiNo(updated.ti_no);
+        setEditedTiNo(updated.ti_no);
         setIsEditMode(false);
         stickyRef.current = sigs;
         saveSignatures(sigs);
@@ -494,8 +515,10 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
             <div className="text-right space-y-2">
               <div className={`flex items-center space-x-2 px-3 py-1 rounded ${isDuplicateTiNo ? "bg-red-500/80" : "bg-white/20"}`}>
                 <span className="text-sm font-semibold whitespace-nowrap">TI No:</span>
-                {isNewMode ? (
-                  <input type="text" value={draftTiNo} onChange={e => setDraftTiNo(e.target.value)}
+                {isNewMode || isEditMode ? (
+                  <input type="text"
+                    value={isNewMode ? draftTiNo : editedTiNo}
+                    onChange={e => isNewMode ? setDraftTiNo(e.target.value) : setEditedTiNo(e.target.value)}
                     placeholder="Auto-generating..."
                     className="font-mono font-bold tracking-wider bg-transparent border-b border-white/60 outline-none text-white placeholder:text-white/50 w-44 text-right" />
                 ) : (
