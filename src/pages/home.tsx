@@ -11,6 +11,7 @@ import {
   useGetItem, useGetTiRecord, useGenerateTiNumber, useGetAdjacentTiRecords,
   useUpdateTiRecord, useCreateTiRecord, getGetItemQueryKey, getGetTiRecordQueryKey,
   useDistinctTiValues, useDistinctCtTypes, getCustomerForItemAsync,
+  getFirstTiForItemCustomerAsync,
 } from "@/api-client";
 import type { TiRecordInput, CoreData } from "@/api-client";
 import { useQueryClient } from "@tanstack/react-query";
@@ -130,6 +131,31 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
       created_by: stickyRef.current.created_by || "",
     },
   });
+  const watchedItemNo = useWatch({ control: form.control, name: "item_no" });
+  const watchedCustomerName = useWatch({ control: form.control, name: "customer_name" });
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!isNewMode || !watchedItemNo || !watchedCustomerName) {
+      if (isNewMode) form.setValue("rev_no", "");
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      getFirstTiForItemCustomerAsync(watchedItemNo, watchedCustomerName)
+        .then((firstTiNo) => {
+          if (!cancelled) form.setValue("rev_no", firstTiNo);
+        })
+        .catch(() => {
+          if (!cancelled) form.setValue("rev_no", "");
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [form, isNewMode, watchedCustomerName, watchedItemNo]);
 
   // Auto-generate TI number on first mount
   useEffect(() => {
