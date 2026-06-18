@@ -18,6 +18,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { SearchModal } from "@/components/ti-form/SearchModal";
 import { AddItemModal } from "@/components/ti-form/AddItemModal";
 import { downloadTiPdf, printTiPdf } from "@/components/ti-form/downloadTiPdf";
+import { formatDisplayDate, parseDisplayDate } from "@/lib/date-format";
 
 // ── Signature persistence key (survives page reload / login) ──────────────────
 const SIG_STORAGE_KEY = "ct_ti_signatures";
@@ -532,8 +533,12 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
               <div className="flex items-center space-x-2 justify-end">
                 <span className="text-sm font-semibold">TI DATE:</span>
                 <Controller name="ti_date" control={form.control} render={({ field }) => (
-                  <input type="date" disabled={!isEditMode && !isNewMode} {...field}
-                    className="bg-transparent border border-white/30 rounded px-2 py-1 text-sm outline-none text-white disabled:opacity-80" />
+                  <FormattedDateInput
+                    value={field.value || ""}
+                    onChange={field.onChange}
+                    disabled={!isEditMode && !isNewMode}
+                    className="w-32 bg-transparent border border-white/30 rounded px-2 py-1 text-sm outline-none text-white placeholder:text-blue-100/60 disabled:opacity-80"
+                  />
                 )} />
               </div>
             </div>
@@ -580,7 +585,7 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
                     fetchField="cus_order_no" disabled={!isFormEnabled}
                     error={formErrors["cus_order_no"]}
                   />
-                  <FormField form={form} name="cus_order_date" label="Customer Order Date" type="date" required
+                  <DateFormField form={form} name="cus_order_date" label="Customer Order Date" required
                     disabled={!isFormEnabled} error={formErrors["cus_order_date"]} />
                 </div>
               </section>
@@ -818,6 +823,62 @@ function FormField({ form, name, label, type = "text", disabled, dataField, requ
       )} />
       {error && <p className="text-red-500 text-xs mt-0.5">{error}</p>}
     </div>
+  );
+}
+
+function DateFormField({ form, name, label, disabled, required, error }: {
+  form: any; name: string; label: string; disabled?: boolean; required?: boolean; error?: string;
+}) {
+  return (
+    <div className="space-y-1">
+      <Label className="text-xs font-semibold text-gray-600 uppercase tracking-wider">
+        {label}{required && <span className="text-red-500 ml-0.5">*</span>}
+      </Label>
+      <Controller name={name} control={form.control} render={({ field }) => (
+        <FormattedDateInput
+          value={field.value || ""}
+          onChange={field.onChange}
+          disabled={disabled}
+          className={`h-9 w-full rounded-md border bg-gray-50 px-3 text-sm outline-none focus:ring-1 focus:ring-[#4a6fa5] disabled:text-gray-700 ${error ? "border-red-400" : "border-gray-300"}`}
+        />
+      )} />
+      {error && <p className="text-red-500 text-xs mt-0.5">{error}</p>}
+    </div>
+  );
+}
+
+function FormattedDateInput({ value, onChange, disabled, className }: {
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const [displayValue, setDisplayValue] = useState(formatDisplayDate(value));
+
+  useEffect(() => {
+    setDisplayValue(formatDisplayDate(value));
+  }, [value]);
+
+  const commit = () => {
+    const parsed = parseDisplayDate(displayValue);
+    if (parsed !== null) {
+      onChange(parsed);
+      setDisplayValue(formatDisplayDate(parsed));
+    } else {
+      setDisplayValue(formatDisplayDate(value));
+    }
+  };
+
+  return (
+    <input
+      type="text"
+      value={displayValue}
+      disabled={disabled}
+      placeholder="DD-MMM-YYYY"
+      onChange={(event) => setDisplayValue(event.target.value)}
+      onBlur={commit}
+      className={className}
+    />
   );
 }
 
