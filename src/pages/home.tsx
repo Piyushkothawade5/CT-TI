@@ -88,6 +88,7 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
   const [itemModalMode, setItemModalMode] = useState<"create" | "edit">("create");
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const pendingItemFocusRef = useRef<string | null>(null);
+  const pendingSearchEditRef = useRef<string | null>(null);
   const lastCoreColumnRef = useRef("2");
 
   // Debounced TI number for duplicate checking
@@ -219,8 +220,10 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
 
   useEffect(() => {
     if (tiRecordData) {
+      const shouldOpenInEditMode = pendingSearchEditRef.current === tiRecordData.ti_no;
+      pendingSearchEditRef.current = null;
       setIsNewMode(false);
-      setIsEditMode(false);
+      setIsEditMode(shouldOpenInEditMode);
       setItemNoInput(tiRecordData.item_no || "");
       setActiveItemNo(tiRecordData.item_no || "");
       form.reset(tiRecordData);
@@ -727,7 +730,21 @@ export default function Home({ onLogout }: { onLogout: () => void }) {
       </div>
 
       <SearchModal open={isSearchModalOpen} onOpenChange={setIsSearchModalOpen}
-        onSelect={tiNo => { setCurrentTiNo(tiNo); setIsSearchModalOpen(false); }} />
+        onSelect={tiNo => {
+          pendingSearchEditRef.current = null;
+          setCurrentTiNo(tiNo);
+          setIsSearchModalOpen(false);
+        }}
+        onEdit={tiNo => {
+          if (tiNo === currentTiNo) {
+            setIsEditMode(true);
+            setIsSearchModalOpen(false);
+            return;
+          }
+          pendingSearchEditRef.current = tiNo;
+          setCurrentTiNo(tiNo);
+          setIsSearchModalOpen(false);
+        }} />
       <AddItemModal open={isAddItemModalOpen} onOpenChange={setIsAddItemModalOpen} itemNo={activeItemNo}
         mode={itemModalMode} itemData={itemData || null}
         onSuccess={() => {
