@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { useDistinctCtTypes, useListTiRecords } from "@/api-client";
 import { Download, Eye, Pencil, RotateCcw, Search } from "lucide-react";
 import { downloadTiPdf } from "@/components/ti-form/downloadTiPdf";
 import { useToast } from "@/hooks/use-toast";
+import { formatDisplayDate, parseDisplayDate } from "@/lib/date-format";
 
 const EMPTY_FILTERS = {
   tiNo: "",
@@ -107,9 +108,9 @@ export function SearchModal({
                 {distinctCtTypes.map((ctType) => <option key={ctType} value={ctType}>{ctType}</option>)}
               </select>
             </div>
-            <SearchField label="Date From" type="date" value={draftFilters.dateFrom}
+            <DateSearchField label="Date From" value={draftFilters.dateFrom}
               onChange={(value) => updateFilter("dateFrom", value)} />
-            <SearchField label="Date To" type="date" value={draftFilters.dateTo}
+            <DateSearchField label="Date To" value={draftFilters.dateTo}
               onChange={(value) => updateFilter("dateTo", value)} />
           </div>
 
@@ -238,8 +239,50 @@ function ActionButton({
   );
 }
 
+function DateSearchField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [displayValue, setDisplayValue] = useState(formatDisplayDate(value));
+
+  useEffect(() => {
+    setDisplayValue(formatDisplayDate(value));
+  }, [value]);
+
+  const commit = () => {
+    const parsed = parseDisplayDate(displayValue);
+    if (parsed !== null) {
+      onChange(parsed);
+      setDisplayValue(formatDisplayDate(parsed));
+    } else {
+      setDisplayValue(formatDisplayDate(value));
+    }
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-xs uppercase text-gray-500">{label}</Label>
+      <Input
+        value={displayValue}
+        placeholder="DD-MMM-YYYY"
+        onChange={(event) => {
+          const nextDisplayValue = event.target.value;
+          setDisplayValue(nextDisplayValue);
+          const parsed = parseDisplayDate(nextDisplayValue);
+          if (parsed !== null) onChange(parsed);
+        }}
+        onBlur={commit}
+        className="h-10 bg-white border-gray-300 shadow-sm focus-visible:ring-2 focus-visible:ring-[#4a6fa5]/20 focus-visible:border-[#4a6fa5]"
+      />
+    </div>
+  );
+}
+
 function formatDate(value?: string | null): string {
-  if (!value) return "-";
-  const [year, month, day] = value.split("-");
-  return year && month && day ? `${day}/${month}/${year}` : value;
+  return formatDisplayDate(value) || "-";
 }
