@@ -13,24 +13,35 @@ export function parseDisplayDate(value: string): string | null {
   const text = value.trim();
   if (!text) return "";
 
-  const displayMatch = text.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  const compactMatch = text.match(/^(\d{2})(\d{2})(\d{4})$/);
+  if (compactMatch) {
+    return toIsoDate(Number(compactMatch[3]), Number(compactMatch[2]), Number(compactMatch[1]));
+  }
+
+  const numericMatch = text.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
+  if (numericMatch) {
+    return toIsoDate(Number(numericMatch[3]), Number(numericMatch[2]), Number(numericMatch[1]));
+  }
+
+  const displayMatch = text.match(/^(\d{1,2})[\/.\-\s]([A-Za-z]{3})[\/.\-\s](\d{4})$/);
   if (displayMatch) {
     const monthIndex = MONTHS.findIndex(
       (month) => month.toLowerCase() === displayMatch[2].toLowerCase()
     );
     const day = Number(displayMatch[1]);
     const year = Number(displayMatch[3]);
-    if (monthIndex >= 0 && isValidDate(year, monthIndex + 1, day)) {
-      return `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    }
+    if (monthIndex >= 0) return toIsoDate(year, monthIndex + 1, day);
   }
 
   const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (isoMatch && isValidDate(Number(isoMatch[1]), Number(isoMatch[2]), Number(isoMatch[3]))) {
-    return text;
-  }
+  if (isoMatch) return toIsoDate(Number(isoMatch[1]), Number(isoMatch[2]), Number(isoMatch[3]));
 
   return null;
+}
+
+function toIsoDate(year: number, month: number, day: number): string | null {
+  if (!isValidDate(year, month, day)) return null;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 function isValidDate(year: number, month: number, day: number): boolean {
