@@ -220,6 +220,12 @@ const s = StyleSheet.create({
 // ─────────────────────────────────────────────────────────────────────────────
 function v(val?: string | null): string { return val ?? ""; }
 
+function formatQuantity(value?: string | null): string {
+  const quantity = v(value).trim();
+  if (!quantity) return "";
+  return /\bNOS\.?$/i.test(quantity) ? quantity : `${quantity} NOS`;
+}
+
 function formatDate(dateStr?: string | null): string {
   return formatDisplayDate(dateStr);
 }
@@ -362,7 +368,7 @@ export function TiPdfDocument({ data }: Props) {
               { label: "CT TYPE",                  val: v(data.ct_type),                 last: true  },
             ],
             [
-              { label: "QTY",                      val: v(data.quantity),                last: false },
+              { label: "QTY",                      val: formatQuantity(data.quantity),   last: false },
               { label: "Sr. No.",                  val: v(data.serial_number),           last: true  },
             ],
           ] as Array<Array<{ label: string; val: string; last: boolean }>>).map((rowCells, ri, arr) => (
