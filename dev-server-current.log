@@ -1,0 +1,14 @@
+
+> ct-ti-app@1.0.0 dev
+> vite --host 127.0.0.1 --port 5173
+
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m803[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m5173[22m/[39m
+[2m[32m  ➜[39m[22m[2m  press [22m[1mh + enter[22m[2m to show help[22m
+[2m10:02:52 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css, /src/lib/auth-context.tsx, /src/pages/viewer.tsx, /src/pages/work-order.tsx, /src/pages/home.tsx, /@fs/C:\Users\SealsE12\Desktop\CT-TI-App\src\components\ti-form\SearchModal.tsx, /@fs/C:\Users\SealsE12\Desktop\CT-TI-App\src\components\admin\AdminPanel.tsx, /@fs/C:\Users\SealsE12\Desktop\CT-TI-App\src\components\ti-form\AddItemModal.tsx[22m
+[2m10:03:16 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/work-order.tsx, /src/index.css[22m
+[2m10:03:33 AM[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msupabase/Work_order_schema.sql[22m
+[2m10:03:55 AM[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msupabase/bootstrap_complete.sql[22m
+[2m10:04:17 AM[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msupabase/production_ready_ti_work_order_patch.sql[22m
