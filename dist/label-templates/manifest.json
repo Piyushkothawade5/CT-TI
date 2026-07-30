@@ -1,0 +1,28 @@
+{
+  "defaultTemplate": "ct-ti-label-template.btw",
+  "multiTapTemplate": "38400191-50-100.btw",
+  "rowTemplates": {
+    "rows-01": "rows-01.btw",
+    "rows-02": "rows-02.btw",
+    "rows-03": "rows-03.btw",
+    "rows-04": "rows-04.btw",
+    "rows-05": "rows-05.btw",
+    "rows-06": "rows-06.btw",
+    "rows-07": "rows-07.btw",
+    "rows-08": "rows-08.btw",
+    "rows-09": "rows-09.btw",
+    "rows-10": "rows-10.btw",
+    "rows-11": "rows-11.btw",
+    "rows-12": "rows-12.btw"
+  },
+  "itemTemplates": [
+    {
+      "itemNos": ["38400191-50-100", "3840019150100"],
+      "file": "38400191-50-100.btw"
+    },
+    {
+      "itemNos": ["ER00001360", "00001360", "1360"],
+      "file": "ER00001360.btw"
+    }
+  ]
+}
