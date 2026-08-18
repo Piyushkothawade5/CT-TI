@@ -67,9 +67,9 @@ function buildTiExcelBlob(data: TiExportData): Blob {
   };
   const addMerge = (from: string, to: string) => merges.push(`${from}:${to}`);
 
-  const titleRow = addRow([{ value: "TECHNICAL INSTRUCTION", style: 3 }], 24);
+  const titleRow = addRow(fillStyledRow([{ value: "TECHNICAL INSTRUCTION", style: 3 }], 6, 3), 24);
   addMerge(`A${titleRow}`, `F${titleRow}`);
-  const subTitleRow = addRow([{ value: "CURRENT TRANSFORMER", style: 6 }], 20);
+  const subTitleRow = addRow(fillStyledRow([{ value: "CURRENT TRANSFORMER", style: 6 }], 6, 6), 20);
   addMerge(`A${subTitleRow}`, `F${subTitleRow}`);
   addRow([]);
 
@@ -81,7 +81,7 @@ function buildTiExcelBlob(data: TiExportData): Blob {
   addPairRow("QTY", formatQuantity(data.quantity), "Sr. No.", data.serial_number);
 
   addRow([]);
-  const electricalSectionRow = addRow([{ value: "ELECTRICAL DETAILS", style: 5 }], 18);
+  const electricalSectionRow = addRow(fillStyledRow([{ value: "ELECTRICAL DETAILS", style: 5 }], 6, 5), 18);
   addMerge(`A${electricalSectionRow}`, `F${electricalSectionRow}`);
   addRow([
     { value: "RATIO", style: 4 },
@@ -101,7 +101,7 @@ function buildTiExcelBlob(data: TiExportData): Blob {
   ]);
 
   addRow([]);
-  const coreSectionRow = addRow([{ value: "CORE PARTICULARS", style: 5 }], 18);
+  const coreSectionRow = addRow(fillStyledRow([{ value: "CORE PARTICULARS", style: 5 }], 6, 5), 18);
   addMerge(`A${coreSectionRow}`, `F${coreSectionRow}`);
   addRow([
     { value: "PARTICULARS", style: 4 },
@@ -130,6 +130,10 @@ function buildTiExcelBlob(data: TiExportData): Blob {
     const rowNumber = addRow([
       { value: row.label, style: 1 },
       { value: data[row.key], style: 2 },
+      blankCell(2),
+      blankCell(2),
+      blankCell(2),
+      blankCell(2),
     ]);
     addMerge(`B${rowNumber}`, `F${rowNumber}`);
   });
@@ -138,8 +142,8 @@ function buildTiExcelBlob(data: TiExportData): Blob {
   const noteRow = addRow([
     { value: "Note", style: 1 },
     { value: data.note, style: 2 },
-    null,
-    null,
+    blankCell(2),
+    blankCell(2),
     { value: "Rev. No.", style: 1 },
     { value: data.rev_no, style: 2 },
   ], 30);
@@ -158,9 +162,10 @@ function buildTiExcelBlob(data: TiExportData): Blob {
     addRow([
       { value: labelA, style: 1 },
       { value: valueA, style: 2 },
-      null,
+      blankCell(2),
       { value: labelB, style: 1 },
       { value: valueB, style: 2 },
+      blankCell(2),
     ]);
     const rowNumber = rows.length;
     addMerge(`B${rowNumber}`, `C${rowNumber}`);
@@ -182,6 +187,14 @@ function buildTiExcelBlob(data: TiExportData): Blob {
   return new Blob([zipSync(files)], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
+}
+
+function fillStyledRow(cells: CellInput[], width: number, style: CellStyle): CellInput[] {
+  return Array.from({ length: width }, (_, index) => cells[index] ?? blankCell(style));
+}
+
+function blankCell(style: CellStyle): CellInput {
+  return { value: "", style };
 }
 
 function buildWorksheetXml(rows: Array<{ cells: CellInput[]; height?: number }>, merges: string[]): string {
@@ -346,10 +359,10 @@ function stylesXml(): string {
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
     <xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf>
     <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf>
-    <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyBorder="1"><alignment horizontal="center" vertical="center"/></xf>
     <xf numFmtId="0" fontId="3" fillId="3" borderId="1" xfId="0" applyFill="1" applyBorder="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
     <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFill="1" applyBorder="1"><alignment vertical="center"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyBorder="1"><alignment horizontal="center" vertical="center"/></xf>
   </cellXfs>
   <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`;
