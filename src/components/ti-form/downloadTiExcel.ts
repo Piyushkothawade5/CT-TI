@@ -53,11 +53,11 @@ export async function downloadTiExcel(data: TiExportData): Promise<void> {
     throw new Error("TI must be checked before Excel download.");
   }
 
-  const blob = buildTiExcelBlob(data);
+  const blob = await buildTiExcelBlob(data);
   downloadBlob(blob, `${safeFileName(data.ti_no || "TI")}.xlsx`);
 }
 
-function buildTiExcelBlob(data: TiExportData): Blob {
+async function buildTiExcelBlob(data: TiExportData): Promise<Blob> {
   const rows: Array<{ cells: CellInput[]; height?: number }> = [];
   const merges: string[] = [];
 
@@ -172,9 +172,10 @@ function buildTiExcelBlob(data: TiExportData): Blob {
     addMerge(`E${rowNumber}`, `F${rowNumber}`);
   }
 
-  const sheetXml = buildWorksheetXml(rows, merges);
+  const logoBytes = await loadLogoBytes();
+  const sheetXml = buildWorksheetXml(rows, merges, Boolean(logoBytes));
   const files: Record<string, Uint8Array> = {
-    "[Content_Types].xml": strToU8(contentTypesXml()),
+    "[Content_Types].xml": strToU8(contentTypesXml(Boolean(logoBytes))),
     "_rels/.rels": strToU8(rootRelsXml()),
     "docProps/app.xml": strToU8(appXml()),
     "docProps/core.xml": strToU8(coreXml(data.ti_no || "TI")),
@@ -183,6 +184,12 @@ function buildTiExcelBlob(data: TiExportData): Blob {
     "xl/styles.xml": strToU8(stylesXml()),
     "xl/worksheets/sheet1.xml": strToU8(sheetXml),
   };
+  if (logoBytes) {
+    files["xl/worksheets/_rels/sheet1.xml.rels"] = strToU8(sheetRelsXml());
+    files["xl/drawings/drawing1.xml"] = strToU8(drawingXml());
+    files["xl/drawings/_rels/drawing1.xml.rels"] = strToU8(drawingRelsXml());
+    files["xl/media/shubhada-logo.png"] = logoBytes;
+  }
 
   return new Blob([zipSync(files)], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -197,7 +204,21 @@ function blankCell(style: CellStyle): CellInput {
   return { value: "", style };
 }
 
-function buildWorksheetXml(rows: Array<{ cells: CellInput[]; height?: number }>, merges: string[]): string {
+async function loadLogoBytes(): Promise<Uint8Array | null> {
+  try {
+    const response = await fetch(`${import.meta.env.BASE_URL}shubhada-logo.png`);
+    if (!response.ok) return null;
+    return new Uint8Array(await response.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+function buildWorksheetXml(
+  rows: Array<{ cells: CellInput[]; height?: number }>,
+  merges: string[],
+  includeDrawing: boolean
+): string {
   const sheetRows = rows.map((row, rowIndex) => {
     const rowNumber = rowIndex + 1;
     const heightAttrs = row.height ? ` ht="${row.height}" customHeight="1"` : "";
@@ -209,6 +230,7 @@ function buildWorksheetXml(rows: Array<{ cells: CellInput[]; height?: number }>,
   const mergeXml = merges.length
     ? `<mergeCells count="${merges.length}">${merges.map((ref) => `<mergeCell ref="${ref}"/>`).join("")}</mergeCells>`
     : "";
+  const drawing = includeDrawing ? `<drawing r:id="rId1"/>` : "";
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
@@ -222,6 +244,7 @@ function buildWorksheetXml(rows: Array<{ cells: CellInput[]; height?: number }>,
   <sheetData>${sheetRows}</sheetData>
   ${mergeXml}
   <pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.3" footer="0.3"/>
+  ${drawing}
 </worksheet>`;
 }
 
@@ -298,14 +321,21 @@ function escapeXml(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
-function contentTypesXml(): string {
+function contentTypesXml(includeDrawing: boolean): string {
+  const imageContentType = includeDrawing
+    ? `\n  <Default Extension="png" ContentType="image/png"/>`
+    : "";
+  const drawingContentType = includeDrawing
+    ? `\n  <Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`
+    : "";
+
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>${imageContentType}
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${drawingContentType}
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
   <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
 </Types>`;
@@ -333,6 +363,53 @@ function workbookRelsXml(): string {
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>`;
+}
+
+function sheetRelsXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>`;
+}
+
+function drawingRelsXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/shubhada-logo.png"/>
+</Relationships>`;
+}
+
+function drawingXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <xdr:oneCellAnchor>
+    <xdr:from>
+      <xdr:col>0</xdr:col>
+      <xdr:colOff>120000</xdr:colOff>
+      <xdr:row>0</xdr:row>
+      <xdr:rowOff>110000</xdr:rowOff>
+    </xdr:from>
+    <xdr:ext cx="900000" cy="320000"/>
+    <xdr:pic>
+      <xdr:nvPicPr>
+        <xdr:cNvPr id="2" name="Shubhada Logo"/>
+        <xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr>
+      </xdr:nvPicPr>
+      <xdr:blipFill>
+        <a:blip r:embed="rId1"/>
+        <a:stretch><a:fillRect/></a:stretch>
+      </xdr:blipFill>
+      <xdr:spPr>
+        <a:xfrm>
+          <a:off x="0" y="0"/>
+          <a:ext cx="900000" cy="320000"/>
+        </a:xfrm>
+        <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+      </xdr:spPr>
+    </xdr:pic>
+    <xdr:clientData/>
+  </xdr:oneCellAnchor>
+</xdr:wsDr>`;
 }
 
 function stylesXml(): string {
