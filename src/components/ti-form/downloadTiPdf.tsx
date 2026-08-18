@@ -4,6 +4,7 @@ import { TiPdfDocument } from "./TiPdf";
 import type { TiRecordInput } from "@/api-client";
 import { buildBarTenderLabelRows, type BarTenderLabelRow } from "@/lib/ti-label-model";
 import { buildBarTenderBtwDownload } from "@/lib/bartender-btw";
+import { downloadTiExcel } from "./downloadTiExcel";
 
 export async function downloadTiPdf(
   data: TiRecordInput & { ti_no?: string | null }
@@ -20,6 +21,8 @@ export async function downloadTiPdf(
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+  await new Promise((resolve) => window.setTimeout(resolve, 250));
+  await downloadTiExcel(data);
 }
 
 export async function printTiPdf(
