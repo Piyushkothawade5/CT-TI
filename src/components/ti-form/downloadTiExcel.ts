@@ -108,6 +108,8 @@ async function buildTiExcelBlob(data: TiExportData): Promise<Blob> {
     { value: "Core 1", style: 4 },
     { value: "Core 2", style: 4 },
     { value: "Core 3", style: 4 },
+    blankCell(4),
+    blankCell(4),
   ]);
 
   const c1 = data.core1 || {};
@@ -117,12 +119,14 @@ async function buildTiExcelBlob(data: TiExportData): Promise<Blob> {
 
   CORE_ROWS.forEach((row, index) => {
     const label = row.key === "max_exc_vk2" ? maxExcLabel : row.label;
-    if (index === 7) addRow([]);
+    if (index === 7) addRow(fillStyledRow([], 6, 2));
     addRow([
       { value: label, style: 1 },
       { value: c1[row.key], style: 2 },
       { value: c2[row.key], style: 2 },
       { value: c3[row.key], style: 2 },
+      blankCell(2),
+      blankCell(2),
     ]);
   });
 
