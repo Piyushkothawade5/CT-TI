@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useForm, Controller } from "react-hook-form";
 import { findHistoricalDrawingDimensions, useCreateItem, useDistinctCtTypes, useUpdateItem } from "@/api-client";
-import type { ItemInput } from "@/api-client";
+import type { CoreData, ItemInput } from "@/api-client";
 import { useToast } from "@/hooks/use-toast";
 import { calculateCoreFromDimensions, calculateTapTurns, expandRatioByCore, formatCoreWeight } from "@/lib/core-calculations";
 import { calculateSecondaryCopperWeight, formatSecondaryCopperWeight } from "@/lib/secondary-copper-calculations";
@@ -42,6 +42,8 @@ const CORE_FIELDS = [
   { label: "Wire Length",            key: "wire_length" },
   { label: "Wire Colour",            key: "wire_colour" },
 ];
+const CORE_KEYS = ["core1", "core2", "core3"] as const;
+const CORE_SAVE_KEYS = [...CORE_FIELDS.map((field) => field.key), "max_exc_is_vk2"];
 
 export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "create", onSuccess }: {
   open: boolean;
@@ -84,7 +86,14 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
       itemTiFormat === "standard" || itemTiFormat === "non_standard"
         ? itemTiFormat
         : normalizeItemTiFormat(form.getValues("ti_format"));
-    let payload: ItemInput = { ...form.getValues(), ti_format: resolvedItemTiFormat };
+    let payload: ItemInput = {
+      ...form.getValues(),
+      item_no: cleanedItemNo,
+      ti_format: resolvedItemTiFormat,
+      core1: collectCoreValues(form, "core1"),
+      core2: collectCoreValues(form, "core2"),
+      core3: collectCoreValues(form, "core3"),
+    };
     try {
       let savedItem: ItemInput;
       if (drawingFile) {
@@ -586,6 +595,23 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
       </DialogContent>
     </Dialog>
   );
+}
+
+function collectCoreValues(form: ReturnType<typeof useForm<ItemInput>>, coreKey: typeof CORE_KEYS[number]): CoreData {
+  const existingCore = form.getValues(coreKey) || {};
+  const core: CoreData = {};
+
+  CORE_SAVE_KEYS.forEach((fieldKey) => {
+    const rawValue =
+      form.getValues(`${coreKey}.${fieldKey}` as any) ??
+      (existingCore as Record<string, unknown>)[fieldKey];
+    if (rawValue === null || rawValue === undefined) return;
+
+    const value = String(rawValue).trim();
+    if (value) core[fieldKey] = value;
+  });
+
+  return core;
 }
 
 function VK2CheckboxCell({ form, mainName, checkboxName, gridRow, gridCol }: {
