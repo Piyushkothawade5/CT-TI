@@ -1,6 +1,6 @@
 const CORS_ALLOW_HEADERS = "authorization, x-client-info, apikey, content-type";
 const CORS_ALLOW_METHODS = "POST, OPTIONS";
-const DEFAULT_ALLOWED_ORIGINS = ["http://localhost:*", "http://127.0.0.1:*"];
+const DEFAULT_ALLOWED_ORIGINS = ["https://ct-ti.vercel.app", "http://localhost:*", "http://127.0.0.1:*"];
 const REQUEST_TIMEOUT_MS = 15_000;
 
 type AppRole = "viewer" | "user" | "checker" | "admin";
