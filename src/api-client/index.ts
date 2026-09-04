@@ -197,8 +197,11 @@ type ListFilters = {
   approvalStatus?: ApprovalStatus | "all";
 };
 
-const directSupabaseUrl = import.meta.env.VITE_SUPABASE_URL?.replace(/\/$/, "") || "";
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+const directSupabaseUrl = (
+  import.meta.env.VITE_SUPABASE_URL || "https://zsjmijuofklsybtynhrm.supabase.co"
+).replace(/\/$/, "");
+const supabaseAnonKey =
+  import.meta.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_915Oeq1rcCOEHW2C6l1QPA_DE0I3Kwf";
 export const isSupabaseConfigured = Boolean(directSupabaseUrl && supabaseAnonKey);
 const AUTH_SESSION_KEY = "ct_ti_auth_session";
 const AUTH_PROFILE_KEY = "ct_ti_auth_profile";
@@ -554,35 +557,31 @@ async function fetchSupabaseEndpoint(
   timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
 ): Promise<Response> {
   const cleanPath = subpath.startsWith("/") ? subpath : `/${subpath}`;
-  const proxyUrl = `${proxySupabaseUrl}${cleanPath}`;
   const directUrl = `${directSupabaseUrl}${cleanPath}`;
 
-  // Try same-origin proxy first in browser to avoid CORS/adblock/iframe restrictions
-  if (typeof window !== "undefined") {
+  // Always use the direct Supabase URL first (standard for production deployments like Vercel, Netlify, etc.)
+  if (directSupabaseUrl) {
     try {
-      const response = await fetchWithTimeout(proxyUrl, init, timeoutMs);
-      // If the proxy returns HTML 404 (e.g. host without proxy), fallback to direct URL
-      if (response.status === 404 && directSupabaseUrl) {
-        const contentType = response.headers.get("content-type") || "";
-        if (contentType.includes("text/html")) {
-          return await fetchWithTimeout(directUrl, init, timeoutMs);
-        }
-      }
-      return response;
-    } catch (proxyErr) {
-      // If proxy fetch failed, attempt direct Supabase URL as fallback
-      if (directSupabaseUrl) {
+      return await fetchWithTimeout(directUrl, init, timeoutMs);
+    } catch (directErr) {
+      // In local development mode ONLY, if direct call fails (e.g. strict dev restrictions), try dev server proxy
+      if (import.meta.env.DEV && typeof window !== "undefined") {
         try {
-          return await fetchWithTimeout(directUrl, init, timeoutMs);
+          const proxyUrl = `${proxySupabaseUrl}${cleanPath}`;
+          const proxyRes = await fetchWithTimeout(proxyUrl, init, timeoutMs);
+          if (proxyRes.ok || (proxyRes.status !== 404 && proxyRes.status !== 502)) {
+            return proxyRes;
+          }
         } catch {
-          // Direct also failed, let the original proxyErr or direct throw
+          // Dev proxy also failed, throw direct error
         }
       }
-      throw proxyErr;
+      throw directErr;
     }
   }
 
-  return await fetchWithTimeout(directUrl, init, timeoutMs);
+  // Fallback if directSupabaseUrl is somehow not set
+  return await fetchWithTimeout(`${proxySupabaseUrl}${cleanPath}`, init, timeoutMs);
 }
 
 function sessionFromAuthResponse(response: SupabaseAuthResponse): AuthSession {
