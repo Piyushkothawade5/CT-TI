@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useForm, Controller, useWatch } from "react-hook-form";
 import {
   Save, FilePlus, Search, ChevronLeft, ChevronRight, Edit3, Printer, FileText, Settings, CalendarDays,
@@ -1698,7 +1698,7 @@ function buildUpdatedWorkOrderFromCorrections(
   const nextWorkOrder = workOrderRecordToInput(baseWorkOrder);
   relevantCorrections.forEach((item) => {
     const workOrderField = WORK_ORDER_REJECTION_FIELD_MAP[item.field_path];
-    (nextWorkOrder as Record<string, unknown>)[workOrderField] = normalizeCorrectedRejectionValue(item);
+    (nextWorkOrder as unknown as Record<string, unknown>)[workOrderField] = normalizeCorrectedRejectionValue(item);
   });
 
   return nextWorkOrder;

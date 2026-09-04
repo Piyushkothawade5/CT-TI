@@ -29,6 +29,7 @@ import {
 } from "@/api-client";
 import { ProfileTopBar } from "@/components/ProfileTopBar";
 import { AddItemModal } from "@/components/ti-form/AddItemModal";
+import { WorkOrderSearchModal } from "@/components/work-order/WorkOrderSearchModal";
 import {
   EMPTY_WORK_ORDER,
   type WorkOrderFormData,
@@ -322,7 +323,7 @@ export default function WorkOrder({
     setFormData(recordToForm(record));
     setIsEditMode(false);
     setIsSearchOpen(false);
-    setActiveOurItemCode(cleanMasterItemCode(record.our_item_code));
+    setActiveOurItemCode(cleanMasterItemCode(record.our_item_code || ""));
     pendingOurItemFocusRef.current = null;
     specificationManuallyEditedRef.current = false;
     lastAutoSpecificationRef.current = "";
@@ -833,132 +834,6 @@ function WorkOrderTextareaField({
       className="min-h-24 overflow-hidden resize-none border-gray-300 bg-gray-50 focus-visible:ring-[#4a6fa5] disabled:bg-gray-50 disabled:text-gray-900"
       placeholder={placeholder}
     />
-  );
-}
-
-function WorkOrderSearchModal({
-  open,
-  records,
-  onClose,
-  onSelect,
-}: {
-  open: boolean;
-  records: WorkOrderRecord[];
-  onClose: () => void;
-  onSelect: (record: WorkOrderRecord) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const filteredRecords = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    if (!normalizedQuery) return records;
-    return records.filter((record) =>
-      [
-        record.work_order,
-        record.customer,
-        record.po_no,
-        record.item_code,
-        record.our_item_code,
-        record.sr_no,
-        record.ti_no,
-        record.traceability_sr_no,
-      ]
-        .filter(Boolean)
-        .some((value) => value.toLowerCase().includes(normalizedQuery))
-    );
-  }, [query, records]);
-
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 px-4">
-      <div className="flex max-h-[82vh] w-full max-w-6xl flex-col overflow-hidden rounded-md border border-gray-200 bg-white shadow-2xl">
-        <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
-          <div>
-            <h2 className="text-lg font-bold text-gray-900">Search Work Orders</h2>
-            <p className="text-xs text-gray-500">{records.length} saved record{records.length === 1 ? "" : "s"}</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-9 w-9 items-center justify-center rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50"
-            aria-label="Close search"
-            title="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="border-b border-gray-100 p-4">
-          <Input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            autoFocus
-            placeholder="Search by TI no, work order, customer, PO no., item code, SR no..."
-            className="h-10 border-gray-300 bg-gray-50 focus-visible:ring-[#4a6fa5]"
-          />
-        </div>
-
-        <div className="overflow-y-auto overflow-x-hidden">
-          {filteredRecords.length ? (
-            <table className="w-full table-fixed text-left text-xs">
-              <colgroup>
-                <col className="w-[14%]" />
-                <col className="w-[15%]" />
-                <col className="w-[16%]" />
-                <col className="w-[15%]" />
-                <col className="w-[13%]" />
-                <col className="w-[6%]" />
-                <col className="w-[15%]" />
-                <col className="w-[6%]" />
-              </colgroup>
-              <thead className="sticky top-0 bg-[#2a4080] text-xs uppercase tracking-wide text-white">
-                <tr>
-                  <th className="whitespace-nowrap px-3 py-3">TI No.</th>
-                  <th className="whitespace-nowrap px-3 py-3">Work Order</th>
-                  <th className="px-3 py-3">Customer</th>
-                  <th className="whitespace-nowrap px-3 py-3">PO No.</th>
-                  <th className="px-3 py-3">Item Code</th>
-                  <th className="px-2 py-3">Qty</th>
-                  <th className="px-2 py-3">SR No.</th>
-                  <th className="px-2 py-3 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRecords.map((record) => (
-                  <tr key={record.id} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="whitespace-nowrap px-3 py-3 font-mono font-semibold text-gray-900">{record.ti_no || "-"}</td>
-                    <td className="whitespace-nowrap px-3 py-3 text-gray-700">{record.work_order || "-"}</td>
-                    <td className="px-3 py-3 text-gray-700">{record.customer || "-"}</td>
-                    <td className="whitespace-nowrap px-3 py-3 text-gray-700">{record.po_no || "-"}</td>
-                    <td className="px-3 py-3 text-gray-700">{record.item_code || "-"}</td>
-                    <td className="px-2 py-3 text-gray-700">{record.qty || "-"}</td>
-                    <td className="px-2 py-3 font-mono leading-5 text-gray-700">{record.sr_no || "-"}</td>
-                    <td className="px-2 py-3 text-right">
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() => onSelect(record)}
-                        className="bg-[#2a4080] hover:bg-[#1f3164]"
-                      >
-                        Open
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div className="flex min-h-48 items-center justify-center px-6 py-10 text-center">
-              <div>
-                <Search className="mx-auto mb-3 h-8 w-8 text-[#2a4080]" />
-                <h3 className="text-base font-semibold text-gray-900">No Work Orders found</h3>
-                <p className="mt-1 text-sm text-gray-500">Save a Work Order or adjust the search text.</p>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
   );
 }
 

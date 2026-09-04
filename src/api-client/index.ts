@@ -197,12 +197,27 @@ type ListFilters = {
   approvalStatus?: ApprovalStatus | "all";
 };
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.replace(/\/$/, "") || "";
+const directSupabaseUrl = import.meta.env.VITE_SUPABASE_URL?.replace(/\/$/, "") || "";
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
-export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
+export const isSupabaseConfigured = Boolean(directSupabaseUrl && supabaseAnonKey);
 const AUTH_SESSION_KEY = "ct_ti_auth_session";
 const AUTH_PROFILE_KEY = "ct_ti_auth_profile";
-const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 45_000;
+const proxySupabaseUrl = "/api/supabase";
+
+function readSupabaseErrorMessage(message: string): string {
+  if (!message) return "";
+  try {
+    const parsed = JSON.parse(message);
+    if (typeof parsed?.msg === "string") return parsed.msg;
+    if (typeof parsed?.message === "string") return parsed.message;
+    if (typeof parsed?.error_description === "string") return parsed.error_description;
+    if (typeof parsed?.error === "string") return parsed.error;
+  } catch {
+    // Plain-text Supabase messages are already useful.
+  }
+  return message;
+}
 
 type SupabaseAuthResponse = {
   access_token: string;
@@ -492,12 +507,82 @@ async function fetchWithTimeout(
   timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
 ): Promise<Response> {
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutId = window.setTimeout(() => {
+    controller.abort(
+      new DOMException(
+        "Request timed out while connecting to the server. Please check your internet connection.",
+        "TimeoutError"
+      )
+    );
+  }, timeoutMs);
+
   try {
     return await fetch(input, { ...init, signal: controller.signal });
+  } catch (err: unknown) {
+    const errorName = (err as { name?: string })?.name;
+    const errorMsg = String((err as { message?: string })?.message || "");
+    if (
+      errorName === "AbortError" ||
+      errorName === "TimeoutError" ||
+      errorMsg.toLowerCase().includes("aborted") ||
+      errorMsg.includes("signal is aborted")
+    ) {
+      const customReason = (controller.signal as { reason?: { message?: string } | string })?.reason;
+      const customMessage =
+        typeof customReason === "object" && customReason?.message
+          ? customReason.message
+          : typeof customReason === "string" && !customReason.includes("without reason")
+          ? customReason
+          : null;
+
+      if (customMessage) {
+        throw new Error(customMessage);
+      }
+      throw new Error(
+        "Connection timed out or was interrupted. Unable to reach the server. Please check your internet connection or try in a new tab."
+      );
+    }
+    throw err;
   } finally {
     window.clearTimeout(timeoutId);
   }
+}
+
+async function fetchSupabaseEndpoint(
+  subpath: string,
+  init: RequestInit = {},
+  timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
+): Promise<Response> {
+  const cleanPath = subpath.startsWith("/") ? subpath : `/${subpath}`;
+  const proxyUrl = `${proxySupabaseUrl}${cleanPath}`;
+  const directUrl = `${directSupabaseUrl}${cleanPath}`;
+
+  // Try same-origin proxy first in browser to avoid CORS/adblock/iframe restrictions
+  if (typeof window !== "undefined") {
+    try {
+      const response = await fetchWithTimeout(proxyUrl, init, timeoutMs);
+      // If the proxy returns HTML 404 (e.g. host without proxy), fallback to direct URL
+      if (response.status === 404 && directSupabaseUrl) {
+        const contentType = response.headers.get("content-type") || "";
+        if (contentType.includes("text/html")) {
+          return await fetchWithTimeout(directUrl, init, timeoutMs);
+        }
+      }
+      return response;
+    } catch (proxyErr) {
+      // If proxy fetch failed, attempt direct Supabase URL as fallback
+      if (directSupabaseUrl) {
+        try {
+          return await fetchWithTimeout(directUrl, init, timeoutMs);
+        } catch {
+          // Direct also failed, let the original proxyErr or direct throw
+        }
+      }
+      throw proxyErr;
+    }
+  }
+
+  return await fetchWithTimeout(directUrl, init, timeoutMs);
 }
 
 function sessionFromAuthResponse(response: SupabaseAuthResponse): AuthSession {
@@ -521,7 +606,7 @@ async function authFetch<T>(
     throw new Error("Supabase is not configured");
   }
 
-  const response = await fetchWithTimeout(`${supabaseUrl}/auth/v1/${path}`, {
+  const response = await fetchSupabaseEndpoint(`/auth/v1/${path}`, {
     ...init,
     headers: {
       apikey: supabaseAnonKey,
@@ -533,7 +618,8 @@ async function authFetch<T>(
 
   if (!response.ok) {
     const message = await response.text();
-    throw new Error(message || `Supabase Auth request failed with ${response.status}`);
+    const cleanMsg = readSupabaseErrorMessage(message);
+    throw new Error(cleanMsg || `Supabase Auth request failed with ${response.status}`);
   }
 
   if (response.status === 204) return undefined as T;
@@ -654,7 +740,7 @@ async function supabaseFetch<T>(
     throw new Error("Please sign in again");
   }
 
-  const response = await fetchWithTimeout(`${supabaseUrl}/rest/v1/${path}`, {
+  const response = await fetchSupabaseEndpoint(`/rest/v1/${path}`, {
     ...init,
     headers: {
       apikey: supabaseAnonKey,
@@ -675,19 +761,6 @@ async function supabaseFetch<T>(
   }
 
   return response.json() as Promise<T>;
-}
-
-function readSupabaseErrorMessage(message: string): string {
-  if (!message) return "";
-  try {
-    const parsed = JSON.parse(message);
-    if (typeof parsed?.message === "string") return parsed.message;
-    if (typeof parsed?.error_description === "string") return parsed.error_description;
-    if (typeof parsed?.error === "string") return parsed.error;
-  } catch {
-    // Plain-text Supabase messages are already useful.
-  }
-  return message;
 }
 
 function eqFilter(value: string): string {
@@ -728,7 +801,7 @@ async function countSupabaseRows(table: string, filters: string[] = []): Promise
   }
 
   const query = [`select=id`, `limit=1`, ...filters].join("&");
-  const response = await fetchWithTimeout(`${supabaseUrl}/rest/v1/${table}?${query}`, {
+  const response = await fetchSupabaseEndpoint(`/rest/v1/${table}?${query}`, {
     headers: {
       apikey: supabaseAnonKey,
       Authorization: `Bearer ${session.access_token}`,
@@ -823,7 +896,7 @@ async function adminUsersRequest<T>(body: Record<string, unknown>): Promise<T> {
   const session = await getValidAuthSession();
   if (!session) throw new Error("Please sign in again");
 
-  const response = await fetchWithTimeout(`${supabaseUrl}/functions/v1/admin-users`, {
+  const response = await fetchSupabaseEndpoint(`/functions/v1/admin-users`, {
     method: "POST",
     headers: {
       apikey: supabaseAnonKey,
@@ -1598,7 +1671,7 @@ export function useGenerateTiNumber() {
 export function useCheckTiRecord() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ tiNo }: { tiNo: string }) => {
+    mutationFn: async ({ tiNo }: { tiNo: string }) => {
       if (isSupabaseConfigured) return checkSupabaseTiRecord(tiNo);
       const records = getTiRecords();
       const idx = records.findIndex((record) => record.ti_no === tiNo);
@@ -1620,7 +1693,7 @@ export function useCheckTiRecord() {
 export function useRejectTiRecord() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ tiNo, rejectionItems = [] }: { tiNo: string; rejectionItems?: RejectionItem[] }) => {
+    mutationFn: async ({ tiNo, rejectionItems = [] }: { tiNo: string; rejectionItems?: RejectionItem[] }) => {
       if (isSupabaseConfigured) return rejectSupabaseTiRecord(tiNo, rejectionItems);
       const records = getTiRecords();
       const idx = records.findIndex((record) => record.ti_no === tiNo);
@@ -1650,7 +1723,7 @@ export function useRejectTiRecord() {
 export function useReopenTiRecord() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ tiNo }: { tiNo: string }) => {
+    mutationFn: async ({ tiNo }: { tiNo: string }) => {
       if (isSupabaseConfigured) return reopenSupabaseTiRecord(tiNo);
       const records = getTiRecords();
       const idx = records.findIndex((record) => record.ti_no === tiNo);

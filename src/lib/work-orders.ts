@@ -16,8 +16,20 @@ export type WorkOrderFormData = {
   traceability_sr_no: string;
 };
 
-export type WorkOrderRecord = WorkOrderFormData & {
+export type WorkOrderRecord = {
   id: string;
+  work_order: string;
+  customer?: string;
+  po_no?: string;
+  po_date?: string;
+  po_line_no?: string;
+  item_code?: string;
+  our_item_code?: string;
+  specification?: string;
+  qty?: string;
+  sr_no?: string;
+  ti_no?: string;
+  traceability_sr_no?: string;
   created_by?: string;
   created_by_user_id?: string | null;
   created_at: string;

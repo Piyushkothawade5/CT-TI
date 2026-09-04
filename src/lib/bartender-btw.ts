@@ -93,7 +93,7 @@ export async function buildBarTenderBtwDownload({
           const patch = patchBarTenderTemplate(templateBytes, row, diagramFile?.filePath);
 
           return {
-            blob: new Blob([patch.bytes], { type: "application/octet-stream" }),
+            blob: new Blob([patch.bytes as unknown as BlobPart], { type: "application/octet-stream" }),
             fileName: `${sanitizeDownloadPart(tiNo || "TI")}-${sanitizeDownloadPart(itemNo || row.ITEM_NO || "ITEM")}-label.btw`,
             replacedFields: patch.replacedFields,
             templateFile,
@@ -940,7 +940,7 @@ function replaceTextObjects(
 ) {
   const printablePattern = /[A-Za-z0-9 .,:/&()*\-\r\n]{4,}/g;
   const matches = [
-    ...text.matchAll(printablePattern).map((match) => match[0]),
+    ...Array.from(text.matchAll(printablePattern), (match) => match[0]),
     ...extractLengthPrefixedUtf16Text(output),
   ]
     .filter((value, index, items) => items.indexOf(value) === index)

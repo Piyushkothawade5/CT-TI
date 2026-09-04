@@ -77,7 +77,7 @@ export function DrawingFieldExtractor({
     autoExtractedRef.current = "";
 
     if (isPdf) {
-      file.arrayBuffer().then((data) => pdfjs.getDocument({ data }).promise).then((pdf) => {
+      file.arrayBuffer().then((data) => pdfjs.getDocument({ data: new Uint8Array(data) }).promise).then((pdf) => {
         if (cancelled) return;
         pdfRef.current = pdf;
         setPageCount(pdf.numPages);

@@ -101,7 +101,7 @@ export function calculateSecondaryCopperWeight(
   });
   if (areaTurnsValues.some((value) => value === null || value <= 0)) return null;
 
-  const areaTurns = areaTurnsValues.reduce((sum, value) => sum + value!, 0);
+  const areaTurns = areaTurnsValues.reduce<number>((sum, value) => sum + (value ?? 0), 0);
   const windingVolumeMm3 = areaTurns * mmpMm;
   const weightKg = windingVolumeMm3 * COPPER_DENSITY_KG_PER_MM3;
   if (!Number.isFinite(weightKg) || weightKg <= 0) return null;

@@ -443,11 +443,13 @@ export function TiPdfDocument({ data }: Props) {
             borderColor: BLACK,
             borderStyle: "solid",
           },
-          isCoreDimensionsRow && {
-            borderTopWidth: 1,
-            borderColor: BLACK,
-            borderStyle: "solid",
-          },
+          isCoreDimensionsRow
+            ? {
+                borderTopWidth: 1,
+                borderColor: BLACK,
+                borderStyle: "solid",
+              }
+            : undefined,
         ]}
       >
         <View style={s.colLabel}>

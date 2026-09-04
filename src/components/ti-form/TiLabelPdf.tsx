@@ -228,7 +228,7 @@ function getTapTurnValues(core: CoreData, ratioParts: ParsedRatio): number[] {
     core.sec_turns_s2s3,
     core.sec_turns_s3s4,
     core.sec_turns_s4s5,
-  ].map(parseNumber).filter((value): value is number => Number.isFinite(value) && value > 0);
+  ].map(parseNumber).filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
   const terminalTapCount = Math.max(getTerminalNames(core, 0).length - 1, 0);
   const tapCount = Math.max(terminalTapCount, segmentTurns.length, totalTurns ? 1 : 0);
 

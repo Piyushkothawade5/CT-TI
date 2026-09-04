@@ -1,4 +1,4 @@
-﻿import { unzlibSync } from "fflate";
+import { unzlibSync } from "fflate";
 import { deflate } from "pako";
 
 export type DrgBoxId = `Box_R${number}_C${number}`;
@@ -120,7 +120,7 @@ export async function downloadDrgBtw({
   const templateBytes = new Uint8Array(await response.arrayBuffer());
   const output = buildDrgBtw(templateBytes, selected, { textSide, textByBox, textRotation });
   downloadBlob(
-    new Blob([output], { type: "application/octet-stream" }),
+    new Blob([output as unknown as BlobPart], { type: "application/octet-stream" }),
     `${sanitizeDownloadPart(tiNo || "TI")}-drg.btw`,
   );
 }

@@ -1,0 +1,6 @@
+{
+  "name": "CT Technical Instruction",
+  "description": "CT Technical Instruction and Work Order System for Shubhada Polymers Products Pvt. Ltd.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
