@@ -84,7 +84,9 @@ function applyStructuredCtDetailRows(lines: string[], result: ParsedItem): void 
     const ratio = normalizeRatio(ratioMatch[1]);
     const afterRatio = line.slice((ratioMatch.index || 0) + ratioMatch[0].length);
     const accuracy = afterRatio.match(/\b(PX|PS|\d+(?:\.\d+)?S?(?:P\d+)?)\b/)?.[1] || "";
-    const frequency = line.match(/\b(50\s*\/\s*60|50|60)\s*(?:HZ)?\b/)?.[1]?.replace(/\s+/g, "") || "";
+    // The HZ unit is REQUIRED: without it a bare "50"/"60" from the ratio's
+    // primary current (e.g. "60/1A") would be misread as a frequency.
+    const frequency = line.match(/\b(50\s*\/\s*60|50|60)\s*HZ\b/)?.[1]?.replace(/\s+/g, "") || "";
     const insulationMatch = line.match(/\b(\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?(?:\s*\/\s*-?)?)\s*KV(?:P)?\b/);
     const insulation = insulationMatch ? `${insulationMatch[1].replace(/\s+/g, "")}kV` : "";
     let insulationClass = "";

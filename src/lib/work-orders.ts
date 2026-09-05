@@ -1,5 +1,45 @@
-import type { TiRecordInput } from "@/api-client";
+import type { TiRecordInput, ItemInput } from "@/api-client";
 import { normalizeItemNo, normalizeItemTiFormat, type ItemTiFormat } from "@/lib/item-ti-compatibility";
+import { todayLocalIso } from "@/lib/date-format";
+
+// Overlay an item master's specification/core fields onto a TI form/record.
+// Shared by the TI screen (fetch flow) and the Work Order auto re-sync so both
+// map the item master to the TI the same way.
+export function mergeTiFormWithItemMaster(
+  current: TiRecordInput,
+  item?: Partial<ItemInput> | null,
+  historicCustomer = ""
+): TiRecordInput {
+  if (!item) return current;
+
+  return {
+    ...current,
+    item_no: item.item_no || current.item_no,
+    ct_type: item.ct_type,
+    cust_part_code: item.cust_part_code || current.cust_part_code,
+    ratio: item.ratio,
+    rated_voltage: item.rated_voltage,
+    stc: item.stc,
+    insulation_level: item.insulation_level,
+    frequency: item.frequency,
+    ref_std: item.ref_std,
+    core1: item.core1 || {},
+    core2: item.core2 || {},
+    core3: item.core3 || {},
+    ct_final_dim: item.ct_final_dim,
+    ga_drg: item.ga_drg,
+    ins_class: item.ins_class,
+    pri_turns: item.pri_turns,
+    pri_copper: item.pri_copper,
+    former: item.former,
+    pri_length: item.pri_length,
+    pri_weight: item.pri_weight,
+    sec_terminal: item.sec_terminal,
+    total_weight: item.total_weight,
+    ref_ti: item.ref_ti,
+    customer_name: current.customer_name || historicCustomer || "",
+  };
+}
 
 export type WorkOrderFormData = {
   work_order: string;
@@ -72,7 +112,16 @@ export function previewNextWorkOrderTiNo() {
 
 export function finalizeWorkOrderTiNo(tiNo?: string | null) {
   const trimmedTiNo = String(tiNo || "").trim();
+  // No preferred value → mint the next free number.
   if (!trimmedTiNo) return formatTiNo(incrementTiCounter());
+  // A preferred value is only honored if it is genuinely free. If it was already
+  // taken (e.g. two orders were previewed at the same number before either saved),
+  // re-allocate a fresh number instead of returning the stale value unchanged, so
+  // the offline fallback can never mint a duplicate TI number.
+  const existing = new Set<string>();
+  for (const record of getLocalTiRecords()) if (record.ti_no) existing.add(record.ti_no);
+  for (const record of readWorkOrderRecords()) if (record.ti_no) existing.add(record.ti_no);
+  if (existing.has(trimmedTiNo)) return formatTiNo(incrementTiCounter());
   if (trimmedTiNo === previewNextWorkOrderTiNo()) incrementTiCounter();
   return trimmedTiNo;
 }
@@ -109,7 +158,7 @@ export function mapWorkOrderToTiDraft(record: WorkOrderRecord): TiRecordInput {
 
   return {
     ti_no: record.ti_no,
-    ti_date: new Date().toISOString().split("T")[0],
+    ti_date: todayLocalIso(),
     item_no: record.our_item_code,
     customer_name: record.customer,
     cust_part_code: record.item_code,

@@ -22,7 +22,15 @@ export async function downloadTiPdf(
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
   await new Promise((resolve) => window.setTimeout(resolve, 250));
-  await downloadTiExcel(data);
+  // The Excel export is intentionally downloaded alongside the PDF. If it fails,
+  // surface a message that makes clear the PDF already succeeded so the user
+  // isn't told "PDF failed" for a file that actually downloaded.
+  try {
+    await downloadTiExcel(data);
+  } catch (excelError) {
+    const detail = excelError instanceof Error ? excelError.message : String(excelError);
+    throw new Error(`PDF downloaded, but the Excel export failed: ${detail}`);
+  }
 }
 
 export async function printTiPdf(
@@ -134,7 +142,21 @@ function openPrintWindow(url: string) {
   const cleanup = () => URL.revokeObjectURL(url);
   newWindow.addEventListener("afterprint", cleanup, { once: true });
   window.setTimeout(cleanup, 60_000);
-  newWindow.onload = () => {
+
+  // A blob URL can finish loading before this handler is attached, in which case
+  // the "load" event never fires for us. Trigger print on load AND via a timed
+  // fallback, guarded so it only runs once.
+  let printed = false;
+  const triggerPrint = () => {
+    if (printed) return;
+    printed = true;
+    try {
+      newWindow.focus();
+    } catch {
+      // Best effort only.
+    }
     newWindow.print();
   };
+  newWindow.addEventListener("load", triggerPrint);
+  window.setTimeout(triggerPrint, 800);
 }

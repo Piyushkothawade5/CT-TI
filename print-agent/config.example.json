@@ -1,0 +1,15 @@
+{
+  "supabaseUrl": "https://zsjmijuofklsybtynhrm.supabase.co",
+  "supabaseAnonKey": "sb_publishable_915Oeq1rcCOEHW2C6l1QPA_DE0I3Kwf",
+  "agentEmail": "printagent@yourcompany.com",
+  "agentPassword": "CHANGE_ME",
+  "bartendExe": "C:\\Program Files (x86)\\Seagull\\BarTender UltraLite\\BarTend.exe",
+  "nodeExe": "node",
+  "libraryDir": "C:\\CTLabels",
+  "tempDir": "C:\\CTLabels\\.work",
+  "printerName": "",
+  "autoPrint": true,
+  "printTimeoutSeconds": 60,
+  "pollSeconds": 3,
+  "tempMaxAgeMinutes": 30
+}

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useForm, Controller, useWatch } from "react-hook-form";
 import {
   Save, FilePlus, Search, ChevronLeft, ChevronRight, Edit3, Printer, FileText, Settings, CalendarDays,
-  CheckCircle2, ShieldCheck, LockKeyhole, XCircle, ClipboardList, Trash2, Tags, Grid3x3,
+  CheckCircle2, ShieldCheck, LockKeyhole, XCircle, ClipboardList, Trash2, Tags,
   Eye, EyeOff, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -23,14 +23,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { SearchModal } from "@/components/ti-form/SearchModal";
 import { AddItemModal } from "@/components/ti-form/AddItemModal";
 import { TiLabelEditorDialog } from "@/components/ti-form/TiLabelEditorDialog";
-import { DrgTemplateDialog } from "@/components/ti-form/DrgTemplateDialog";
 import { downloadTiPdf, printTiPdf } from "@/components/ti-form/downloadTiPdf";
-import { formatDisplayDate, parseDisplayDate } from "@/lib/date-format";
+import { formatDisplayDate, parseDisplayDate, todayLocalIso } from "@/lib/date-format";
 import { calculateCoreFromDimensions, calculateTapTurns, expandRatioByCore, formatCoreWeight } from "@/lib/core-calculations";
 import { AdminPanel } from "@/components/admin/AdminPanel";
 import { ProfileTopBar } from "@/components/ProfileTopBar";
 import { buildItemTiFormatMap, getItemTiFormat, normalizeItemNo } from "@/lib/item-ti-compatibility";
-import { getPendingWorkOrderSummaryFromRecords, mapWorkOrderToTiDraft } from "@/lib/work-orders";
+import { getPendingWorkOrderSummaryFromRecords, mapWorkOrderToTiDraft, mergeTiFormWithItemMaster } from "@/lib/work-orders";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 
 // â”€â”€ Signature persistence key (survives page reload / login) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -186,7 +185,6 @@ export default function Home({
   const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
   const [isLabelEditorOpen, setIsLabelEditorOpen] = useState(false);
-  const [isDrgDialogOpen, setIsDrgDialogOpen] = useState(false);
   const [isDrawingViewerOpen, setIsDrawingViewerOpen] = useState(false);
   const [itemModalMode, setItemModalMode] = useState<"create" | "edit">("create");
   const [queuedWorkOrderId, setQueuedWorkOrderId] = useState<string | null>(null);
@@ -255,7 +253,7 @@ export default function Home({
 
   const form = useForm<TiRecordInput>({
     defaultValues: {
-      ti_date: new Date().toISOString().split("T")[0],
+      ti_date: todayLocalIso(),
       item_no: "",
       approval_status: "pending_check",
       approved_by: "",
@@ -352,7 +350,7 @@ export default function Home({
         setActiveItemNo("");
         setRejectionItems([]);
         form.reset({
-          ti_date: new Date().toISOString().split("T")[0],
+          ti_date: todayLocalIso(),
           item_no: "",
           approval_status: "pending_check",
           approved_by: "",
@@ -510,7 +508,7 @@ export default function Home({
     setFormErrors({});
     setRejectionItems([]);
     form.reset({
-      ti_date: new Date().toISOString().split("T")[0],
+      ti_date: todayLocalIso(),
       item_no: "",
       approval_status: "pending_check",
       created_by: profile.initials,
@@ -546,7 +544,7 @@ export default function Home({
       (normalizeItemNo(itemData?.item_no) === workOrderItemNo ? itemData : null);
     const nextFormValues = mergeTiFormWithItemMaster(
       {
-        ti_date: new Date().toISOString().split("T")[0],
+        ti_date: todayLocalIso(),
         approval_status: "pending_check",
         created_by: profile.initials,
         created_by_user_id: profile.id,
@@ -809,7 +807,7 @@ export default function Home({
     }
     if (!navigationTiNo && navigableTiRecords.length) {
       setDraftTiNo("");
-      setCurrentTiNo(navigableTiRecords.at(-1)!.ti_no);
+      setCurrentTiNo(navigableTiRecords[0]!.ti_no);
       return;
     }
     else toast({ title: "No next record" });
@@ -1001,7 +999,7 @@ export default function Home({
 
   // â”€â”€ Arrow-key navigation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  const hideTopBar = isSearchModalOpen || isAddItemModalOpen || isAdminPanelOpen || isLabelEditorOpen || isDrgDialogOpen;
+  const hideTopBar = isSearchModalOpen || isAddItemModalOpen || isAdminPanelOpen || isLabelEditorOpen;
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -1028,7 +1026,6 @@ export default function Home({
         <SidebarButton icon={<Printer />} title="Print" onClick={handlePrintPdf} disabled={!isChecked} />
         <SidebarButton icon={<FileText />} title="PDF" onClick={handleDownloadPdf} disabled={!isChecked} />
         {canUseLabels && <SidebarButton icon={<Tags />} title="Labels" onClick={handleDownloadLabels} disabled={!isChecked} />}
-        <SidebarButton icon={<Grid3x3 />} title="Drg" onClick={() => setIsDrgDialogOpen(true)} />
         <div className="flex-1" />
         {userIsAdmin && <SidebarButton icon={<ShieldCheck />} title="Admin" onClick={() => setIsAdminPanelOpen(true)} />}
       </aside>
@@ -1380,11 +1377,6 @@ export default function Home({
       {userIsAdmin && (
         <AdminPanel open={isAdminPanelOpen} onOpenChange={setIsAdminPanelOpen} />
       )}
-      <DrgTemplateDialog
-        open={isDrgDialogOpen}
-        onOpenChange={setIsDrgDialogOpen}
-        tiNo={currentTiNo || draftTiNo || form.getValues("ti_no") || "TI"}
-      />
       <TiLabelEditorDialog
         open={isLabelEditorOpen}
         onOpenChange={setIsLabelEditorOpen}
@@ -1519,42 +1511,6 @@ function normalizeRejectionItems(value: unknown): RejectionItem[] {
       corrected_value: typeof item.corrected_value === "string" ? item.corrected_value : stringifyFieldValue(item.corrected_value),
     }))
     .filter((item) => item.field_path || item.field_label);
-}
-
-function mergeTiFormWithItemMaster(
-  current: TiRecordInput,
-  item?: Partial<ItemInput> | null,
-  historicCustomer = ""
-): TiRecordInput {
-  if (!item) return current;
-
-  return {
-    ...current,
-    item_no: item.item_no || current.item_no,
-    ct_type: item.ct_type,
-    cust_part_code: item.cust_part_code || current.cust_part_code,
-    ratio: item.ratio,
-    rated_voltage: item.rated_voltage,
-    stc: item.stc,
-    insulation_level: item.insulation_level,
-    frequency: item.frequency,
-    ref_std: item.ref_std,
-    core1: item.core1 || {},
-    core2: item.core2 || {},
-    core3: item.core3 || {},
-    ct_final_dim: item.ct_final_dim,
-    ga_drg: item.ga_drg,
-    ins_class: item.ins_class,
-    pri_turns: item.pri_turns,
-    pri_copper: item.pri_copper,
-    former: item.former,
-    pri_length: item.pri_length,
-    pri_weight: item.pri_weight,
-    sec_terminal: item.sec_terminal,
-    total_weight: item.total_weight,
-    ref_ti: item.ref_ti,
-    customer_name: current.customer_name || historicCustomer || "",
-  };
 }
 
 function cloneTiRecordInput(data: TiRecordInput): TiRecordInput {

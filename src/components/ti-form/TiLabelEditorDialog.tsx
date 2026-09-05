@@ -1,6 +1,14 @@
 import React from "react";
-import { Download, Loader2 } from "lucide-react";
+import { Loader2, Printer, Save, Lock, Unlock } from "lucide-react";
 import type { TiRecordInput } from "@/api-client";
+import {
+  useTiLabelStatus,
+  useReserveTiLabels,
+  useUnlockTiLabels,
+  useEnqueuePrintJob,
+  useSavedLabelExists,
+} from "@/api-client";
+import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { downloadBarTenderLabelRowBtw } from "@/components/ti-form/downloadTiPdf";
+import { buildBarTenderBtwDownload } from "@/lib/bartender-btw";
 import {
   TAP_FIELD_NAMES,
   buildBarTenderLabelRows,
@@ -48,13 +56,42 @@ const MAIN_FIELDS: Array<{ key: keyof BarTenderLabelRow; label: string }> = [
 
 export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorDialogProps) {
   const { toast } = useToast();
+  const { profile } = useAuth();
+  const role = String(profile?.role || "").toLowerCase();
+  const canPrint = role === "user";
+  const isAdmin = role === "admin";
+
   const [row, setRow] = React.useState<BarTenderLabelRow | null>(null);
-  const [isDownloading, setIsDownloading] = React.useState(false);
+  const [busy, setBusy] = React.useState<null | "save" | "print" | "unlock">(null);
+  const [printQty, setPrintQty] = React.useState(1);
+
+  const tiNo = String(data?.ti_no || "");
+  const itemCode = String(data?.item_no || data?.cust_part_code || "").trim();
+
+  const labelStatus = useTiLabelStatus(tiNo, { query: { enabled: open && !!tiNo } });
+  const savedExists = useSavedLabelExists(itemCode, { query: { enabled: open && !!itemCode } });
+  const reserveLabels = useReserveTiLabels();
+  const unlockLabels = useUnlockTiLabels();
+  const enqueueJob = useEnqueuePrintJob();
+
+  const templateExists = savedExists.data === true;
+  const status = labelStatus.data;
+  const qty = status?.label_qty ?? parseQtyText(status?.quantity);
+  const issued = status?.labels_issued ?? 0;
+  const reserved = status?.labels_reserved ?? 0;
+  // Remaining excludes both printed (issued) and in-flight (reserved) labels.
+  const remaining = qty != null ? Math.max(qty - issued - reserved, 0) : null;
+  const locked = Boolean(status?.labels_locked);
 
   React.useEffect(() => {
     if (!open || !data) return;
     setRow(buildBarTenderLabelRows(data)[0] || null);
   }, [data, open]);
+
+  React.useEffect(() => {
+    if (remaining == null) return;
+    setPrintQty(remaining > 0 ? remaining : 0);
+  }, [remaining]);
 
   const tapRowCount = row?.tapRows.filter(Boolean).length || 0;
 
@@ -74,21 +111,76 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
     });
   };
 
-  const handleDownload = async () => {
+  const handleSaveLabel = async () => {
     if (!data || !row) return;
-    setIsDownloading(true);
+    if (!itemCode) {
+      toast({ variant: "destructive", title: "Missing item code", description: "This TI has no item code to key the saved label folder." });
+      return;
+    }
+    setBusy("save");
     try {
-      await downloadBarTenderLabelRowBtw({
-        tiNo: data.ti_no || "TI",
-        itemNo: row.ITEM_NO || data.cust_part_code || data.item_no || "",
+      // Only the main .btw is shipped for the library. Multi-tap templates that
+      // reference an external diagram BMP will show a broken image until the
+      // operator re-links/inserts the diagram during their one-time correction.
+      const download = await buildBarTenderBtwDownload({
+        tiNo: tiNo || "TI",
+        itemNo: row.ITEM_NO || itemCode,
         row,
       });
-      toast({ title: "Label downloaded", description: `Template rows: ${String(Math.max(tapRowCount, 1)).padStart(2, "0")}` });
+      const btw_base64 = await blobToBase64(download.blob);
+      await enqueueJob.mutateAsync({ action: "save", ti_no: tiNo, item_code: itemCode, btw_base64 });
+      toast({
+        title: "Saved to label library",
+        description: "The print PC will open it in BarTender — correct it, then press Ctrl+S to keep your changes.",
+      });
       onOpenChange(false);
     } catch (error) {
-      toast({ variant: "destructive", title: "Label download failed", description: getErrorMessage(error) });
+      toast({ variant: "destructive", title: "Save failed", description: getErrorMessage(error) });
     } finally {
-      setIsDownloading(false);
+      setBusy(null);
+    }
+  };
+
+  const handlePrint = async () => {
+    if (!data || !tiNo) return;
+    if (!itemCode) {
+      toast({ variant: "destructive", title: "Missing item code", description: "This TI has no item code to locate the saved label." });
+      return;
+    }
+    if (!templateExists) {
+      toast({ variant: "destructive", title: "No saved template", description: "Save the label template for this item code first, then print." });
+      return;
+    }
+    if (!printQty || printQty < 1) return;
+    setBusy("print");
+    try {
+      // reserve_ti_labels allocates the serials, reserves them against the quota,
+      // and queues the print job atomically. The count is only committed once the
+      // agent confirms the print (a failed print releases the reservation).
+      const result = await reserveLabels.mutateAsync({ tiNo, itemCode, count: printQty });
+      toast({
+        title: `Printing ${result.count} label(s)`,
+        description: `Serials ${result.serial_start} – ${result.serial_end}. ${result.remaining} remaining. The count updates once the printer confirms.`,
+      });
+      await labelStatus.refetch();
+    } catch (error) {
+      toast({ variant: "destructive", title: "Print failed", description: getErrorMessage(error) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleUnlock = async () => {
+    if (!tiNo) return;
+    setBusy("unlock");
+    try {
+      await unlockLabels.mutateAsync({ tiNo });
+      toast({ title: "Labels unlocked", description: "This TI can print labels again." });
+      await labelStatus.refetch();
+    } catch (error) {
+      toast({ variant: "destructive", title: "Unlock failed", description: getErrorMessage(error) });
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -98,6 +190,47 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
         <DialogHeader className="border-b border-gray-200 px-6 py-4">
           <DialogTitle>Label Editor</DialogTitle>
         </DialogHeader>
+
+        {(canPrint || isAdmin) && (
+          <div className="flex flex-wrap items-center gap-4 border-b border-gray-200 bg-gray-50 px-6 py-3">
+            <div className="text-sm">
+              <span className="font-semibold text-[#2a4080]">{issued}</span>
+              <span className="text-gray-500"> / {qty ?? "—"} printed</span>
+              {reserved > 0 && (
+                <span className="ml-2 text-amber-600">{reserved} printing…</span>
+              )}
+              {remaining != null && (
+                <span className="ml-2 text-gray-500">({remaining} remaining)</span>
+              )}
+            </div>
+            {locked && (
+              <span className="inline-flex items-center gap-1 rounded bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
+                <Lock className="h-3 w-3" /> Locked — admin must unlock
+              </span>
+            )}
+            {canPrint && templateExists && !locked && remaining != null && remaining > 0 && (
+              <div className="flex items-center gap-2">
+                <Label className="text-xs font-semibold uppercase text-gray-600">Print now</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={remaining}
+                  value={printQty}
+                  onChange={(event) =>
+                    setPrintQty(Math.max(1, Math.min(remaining, Number(event.target.value) || 1)))
+                  }
+                  className="h-8 w-20"
+                />
+              </div>
+            )}
+            {canPrint && !savedExists.isLoading && !templateExists && (
+              <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
+                No saved template for this item code — click Save Label first
+              </span>
+            )}
+            {labelStatus.isLoading && <Loader2 className="h-4 w-4 animate-spin text-gray-400" />}
+          </div>
+        )}
 
         {row ? (
           <div className="grid gap-5 px-6 py-5 lg:grid-cols-[1fr_1.2fr]">
@@ -144,14 +277,39 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
           <div className="px-6 py-10 text-center text-sm text-gray-500">No label data found.</div>
         )}
 
-        <DialogFooter className="border-t border-gray-200 px-6 py-4">
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isDownloading}>
+        <DialogFooter className="flex-wrap gap-2 border-t border-gray-200 px-6 py-4">
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy != null}>
             Cancel
           </Button>
-          <Button className="bg-[#2a4080] hover:bg-[#22366f]" onClick={handleDownload} disabled={!row || isDownloading}>
-            {isDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-            Download BTW
-          </Button>
+          {isAdmin && locked && (
+            <Button
+              variant="outline"
+              className="border-amber-400 text-amber-700 hover:bg-amber-50"
+              onClick={handleUnlock}
+              disabled={busy != null}
+            >
+              {busy === "unlock" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Unlock className="mr-2 h-4 w-4" />}
+              Unlock
+            </Button>
+          )}
+          {canPrint && (
+            <>
+              <Button variant="outline" onClick={handleSaveLabel} disabled={!row || busy != null}>
+                {busy === "save" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                {templateExists ? "Re-save Label" : "Save Label"}
+              </Button>
+              {templateExists && (
+                <Button
+                  className="bg-[#2a4080] hover:bg-[#22366f]"
+                  onClick={handlePrint}
+                  disabled={busy != null || locked || !remaining || printQty < 1}
+                >
+                  {busy === "print" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Printer className="mr-2 h-4 w-4" />}
+                  Print
+                </Button>
+              )}
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -554,4 +712,19 @@ function isPresent(value: unknown): boolean {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function parseQtyText(value?: string | null): number | null {
+  const match = String(value ?? "").match(/\d+/);
+  return match ? Number(match[0]) : null;
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
 }

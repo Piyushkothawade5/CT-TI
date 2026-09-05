@@ -116,9 +116,10 @@ export async function buildBarTenderBtwDownload({
   throw new Error(`Could not create the BarTender label without cutting required text. ${templateErrors.slice(0, 2).join(" | ")}`);
 }
 
-function shouldPatchDiagramTemplate(templateFile: string): boolean {
-  const fileName = templateFile.trim().replace(/\\/g, "/").split("/").pop() || "";
-  return /^rows-\d{2}\.btw$/i.test(fileName);
+function shouldPatchDiagramTemplate(_templateFile: string): boolean {
+  // Diagram BMP placeholders were removed from the templates, so the webapp no
+  // longer generates the external diagram image or patches its file path.
+  return false;
 }
 
 function buildDiagramExternalFiles({

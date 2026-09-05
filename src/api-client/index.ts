@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { mergeTiFormWithItemMaster } from "@/lib/work-orders";
 
 export type AppRole = "viewer" | "user" | "checker" | "admin";
 export type ApprovalStatus = "pending_check" | "checked" | "rejected";
@@ -145,7 +146,43 @@ export interface TiRecordInput {
   remarks?: string;
   rev_no?: string;
   note?: string;
+  label_qty?: number | null;
+  labels_issued?: number | null;
+  labels_locked?: boolean | null;
+  labels_locked_by?: string | null;
+  labels_locked_at?: string | null;
   [key: string]: unknown;
+}
+
+export interface TiLabelStatus {
+  ti_no: string;
+  quantity: string | null;
+  label_qty: number | null;
+  labels_issued: number;
+  labels_reserved: number;
+  labels_locked: boolean;
+}
+
+export interface ReserveLabelsResult {
+  job_id: string;
+  serial_start: string;
+  serial_end: string;
+  count: number;
+  labels_issued: number;
+  labels_reserved: number;
+  label_qty: number;
+  remaining: number;
+}
+
+export type PrintJobAction = "save" | "print";
+
+export interface PrintJobInput {
+  action: PrintJobAction;
+  ti_no?: string | null;
+  item_code: string;
+  serial_start?: string | null;
+  label_count?: number | null;
+  btw_base64?: string | null;
 }
 
 export interface TiRecord extends TiRecordInput {
@@ -286,7 +323,14 @@ function cleanItemNo(itemNo: string): string {
 }
 
 function todayIso(): string {
-  return new Date().toISOString().split("T")[0];
+  // Local calendar day, not UTC. `toISOString()` returns the UTC date, which is
+  // the previous day for IST users before ~05:30 local and can disagree with the
+  // local-time financial-year / TI-number logic (see formatTiNo).
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function normalizeCore(core?: CoreData): CoreData {
@@ -701,9 +745,18 @@ export async function signInWithPassword(
     body: JSON.stringify({ email, password }),
   });
   const session = sessionFromAuthResponse(response);
+  // The session must be stored before fetchCurrentProfile (it reads the token
+  // from storage), but if the profile check fails — e.g. the account is inactive
+  // — clear it so a rejected login never leaves a usable session behind.
   writeStoredSession(session);
-  const profile = await fetchCurrentProfile();
-  return { session, profile };
+  try {
+    const profile = await fetchCurrentProfile();
+    return { session, profile };
+  } catch (error) {
+    writeStoredSession(null);
+    writeStoredProfile(null);
+    throw error;
+  }
 }
 
 export async function restoreAuthSession(): Promise<{ session: AuthSession; profile: UserProfile } | null> {
@@ -957,16 +1010,39 @@ async function createSupabaseItem(data: ItemInput): Promise<Item> {
   return rows[0];
 }
 
+// Build a PATCH body that touches ONLY the fields actually supplied. Do NOT use
+// normalizeItemInput here: it force-defaults core1/core2/core3 to {} and ti_format
+// to "standard", which for a partial update (e.g. the default_customer back-fill in
+// createSupabaseTiRecord) would overwrite and DELETE the item's saved core details.
+function normalizeItemPatch(data: Partial<ItemInput>): Partial<ItemInput> {
+  const patch: Partial<ItemInput> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (value !== undefined) (patch as Record<string, unknown>)[key] = value;
+  }
+  if (patch.item_no !== undefined) patch.item_no = cleanItemNo(patch.item_no);
+  if (patch.ti_format !== undefined) patch.ti_format = patch.ti_format === "non_standard" ? "non_standard" : "standard";
+  if (patch.ct_type !== undefined) patch.ct_type = normalizeCtType(patch.ct_type);
+  if (patch.default_customer !== undefined) patch.default_customer = normalizeCustomer(patch.default_customer);
+  if (patch.drawing_url !== undefined) patch.drawing_url = normalizeText(patch.drawing_url);
+  if (patch.drawing_file_name !== undefined) patch.drawing_file_name = normalizeText(patch.drawing_file_name);
+  if (patch.drawing_content_type !== undefined) patch.drawing_content_type = normalizeText(patch.drawing_content_type);
+  if (patch.core1 !== undefined) patch.core1 = normalizeCore(patch.core1);
+  if (patch.core2 !== undefined) patch.core2 = normalizeCore(patch.core2);
+  if (patch.core3 !== undefined) patch.core3 = normalizeCore(patch.core3);
+  return patch;
+}
+
 async function updateSupabaseItem(itemNo: string, data: Partial<ItemInput>): Promise<Item> {
   const cleanedItemNo = cleanItemNo(itemNo);
-  const nextItemNo = data.item_no ? cleanItemNo(data.item_no) : cleanedItemNo;
-  const normalized = normalizeItemInput({ ...data, item_no: nextItemNo } as ItemInput);
+  const patch = normalizeItemPatch(data);
+  // Only rename the item_no column when a different code is actually provided.
+  if (patch.item_no === cleanedItemNo) delete patch.item_no;
   const rows = await supabaseFetch<Item[]>(
     `ct_items?item_no=eq.${eqFilter(cleanedItemNo)}`,
     {
       method: "PATCH",
       prefer: "return=representation",
-      body: JSON.stringify(normalized),
+      body: JSON.stringify(patch),
     }
   );
   const item = rows[0];
@@ -1020,15 +1096,70 @@ async function createSupabaseWorkOrder(data: WorkOrderInput): Promise<WorkOrderR
   return rows[0];
 }
 
+// Work-order fields that feed the generated TI. Changing any of them on a work
+// order that already has a linked TI must either re-sync that TI (pending) or be
+// blocked (checked).
+// Note: traceability_sr_no is intentionally NOT here — it is a work-order-only
+// field and may be edited freely without gating or re-syncing the linked TI.
+const TI_SOURCE_WORK_ORDER_FIELDS: Array<keyof WorkOrderInput> = [
+  "our_item_code",
+  "customer",
+  "item_code",
+  "po_no",
+  "po_date",
+  "po_line_no",
+  "work_order",
+  "qty",
+  "sr_no",
+];
+
+// Map a work order's fields to the TI fields they populate (mirrors
+// mapWorkOrderToTiDraft, but from a normalized WorkOrderInput).
+function workOrderTiSourceDraft(wo: WorkOrderInput): Partial<TiRecordInput> {
+  return {
+    item_no: wo.our_item_code,
+    customer_name: wo.customer,
+    cust_part_code: wo.item_code,
+    cus_order_no: wo.po_no,
+    cus_order_date: wo.po_date,
+    wo_number: wo.work_order,
+    po_item_no: wo.po_line_no,
+    serial_number: wo.sr_no || wo.traceability_sr_no,
+    quantity: wo.qty,
+    note: wo.traceability_sr_no ? `Traceability Sr. No.: ${wo.traceability_sr_no}` : "",
+  };
+}
+
 async function updateSupabaseWorkOrder(id: string, data: WorkOrderInput): Promise<WorkOrderRecord> {
   const normalized = normalizeWorkOrderInput(data);
-  const existingRows = await supabaseFetch<Array<Pick<WorkOrderRecord, "id" | "ti_no">>>(
-    `ct_work_orders?id=eq.${eqFilter(id)}&select=id,ti_no&limit=1`
+  const existingRows = await supabaseFetch<Array<Partial<WorkOrderRecord>>>(
+    `ct_work_orders?id=eq.${eqFilter(id)}&select=id,ti_no,our_item_code,item_code,customer,po_no,po_date,po_line_no,work_order,qty,sr_no,traceability_sr_no&limit=1`
   );
   const existingRecord = existingRows[0];
   if (!existingRecord) throw new Error("Work Order not found");
 
   const existingTiNo = existingRecord.ti_no?.trim() || "";
+
+  // Did any TI-source field actually change?
+  const tiSourceChanged = TI_SOURCE_WORK_ORDER_FIELDS.some(
+    (field) => String(normalized[field] ?? "") !== String((existingRecord[field] as string | undefined) ?? "")
+  );
+
+  // If a TI-source field changed and this work order already has a linked TI,
+  // gate on the TI's state: block when checked, re-sync when pending/rejected.
+  let linkedTi: TiRecord | null = null;
+  if (existingTiNo && tiSourceChanged) {
+    const tiRows = await supabaseFetch<TiRecord[]>(
+      `ct_ti_records?ti_no=eq.${eqFilter(existingTiNo)}&select=*&limit=1`
+    );
+    linkedTi = tiRows[0] || null;
+    if (linkedTi && linkedTi.approval_status === "checked") {
+      throw new Error(
+        `TI ${existingTiNo} is already checked. Ask an admin to reopen (unlock) it before changing the item code or order details.`
+      );
+    }
+  }
+
   const preferredTiNo = normalized.ti_no?.trim() || existingTiNo || null;
   let tiNo = existingTiNo;
 
@@ -1056,7 +1187,46 @@ async function updateSupabaseWorkOrder(id: string, data: WorkOrderInput): Promis
       body: JSON.stringify({ ...normalized, ti_no: tiNo }),
     }
   );
-  return rows[0];
+  const savedWorkOrder = rows[0];
+
+  // Auto re-sync: when the work order keeps its linked (pending/rejected) TI and a
+  // TI-source field changed, refresh that TI from the new item master + WO fields,
+  // keeping the same TI number and its original date, and returning it to pending.
+  if (
+    linkedTi &&
+    tiNo === existingTiNo &&
+    (linkedTi.approval_status === "pending_check" || linkedTi.approval_status === "rejected")
+  ) {
+    let itemMaster: Item | null = null;
+    const cleanedItemNo = normalized.our_item_code ? cleanItemNo(normalized.our_item_code) : "";
+    if (cleanedItemNo) {
+      try {
+        itemMaster = await findSupabaseItem(cleanedItemNo);
+      } catch {
+        itemMaster = null; // item master not found — sync the WO-derived fields only
+      }
+    }
+    const resynced = mergeTiFormWithItemMaster(
+      {
+        ...linkedTi,
+        ...workOrderTiSourceDraft(normalized),
+        ti_no: linkedTi.ti_no,
+        ti_date: linkedTi.ti_date,
+        approval_status: "pending_check",
+      },
+      itemMaster || undefined
+    );
+    try {
+      await updateSupabaseTiRecord(linkedTi.ti_no, resynced);
+    } catch (resyncError) {
+      const detail = resyncError instanceof Error ? resyncError.message : String(resyncError);
+      throw new Error(
+        `Work order saved, but re-syncing TI ${linkedTi.ti_no} failed: ${detail}. Open that TI and re-save it to sync the new details.`
+      );
+    }
+  }
+
+  return savedWorkOrder;
 }
 
 async function createSupabaseTiRecord(data: TiRecordInput): Promise<TiRecord> {
@@ -1148,6 +1318,67 @@ async function rejectSupabaseTiRecord(tiNo: string, rejectionItems: RejectionIte
   const record = normalizeRpcRecordResult(result);
   if (!record) throw new Error("TI record was not rejected");
   return record;
+}
+
+async function fetchTiLabelStatus(tiNo: string): Promise<TiLabelStatus> {
+  const rows = await supabaseFetch<Array<Record<string, unknown>>>(
+    `ct_ti_records?ti_no=eq.${eqFilter(tiNo)}&select=ti_no,quantity,label_qty,labels_issued,labels_reserved,labels_locked&limit=1`
+  );
+  const record = rows[0];
+  if (!record) throw new Error("TI record not found");
+  return {
+    ti_no: String(record.ti_no || tiNo),
+    quantity: (record.quantity as string) ?? null,
+    label_qty: record.label_qty === null || record.label_qty === undefined ? null : Number(record.label_qty),
+    labels_issued: Number(record.labels_issued ?? 0),
+    labels_reserved: Number(record.labels_reserved ?? 0),
+    labels_locked: Boolean(record.labels_locked),
+  };
+}
+
+async function fetchSavedLabelExists(itemCode: string): Promise<boolean> {
+  // Use the definer RPC so ordinary users never need SELECT on ct_print_jobs
+  // (which holds the BarTender template blobs). See saved_label_exists in
+  // supabase/2026_production_hardening.sql.
+  return rpc<boolean>("saved_label_exists", { p_item_code: itemCode });
+}
+
+async function reserveTiLabelsRequest(
+  tiNo: string,
+  itemCode: string,
+  count: number
+): Promise<ReserveLabelsResult> {
+  return rpc<ReserveLabelsResult>("reserve_ti_labels", {
+    p_ti_no: tiNo,
+    p_item_code: itemCode,
+    p_count: count,
+  });
+}
+
+async function unlockTiLabelsRequest(
+  tiNo: string,
+  newQty?: number | null
+): Promise<{ labels_issued: number; label_qty: number | null; locked: boolean }> {
+  return rpc("unlock_ti_labels", { p_ti_no: tiNo, p_new_qty: newQty ?? null });
+}
+
+async function createPrintJob(input: PrintJobInput): Promise<{ id: string }> {
+  const profile = readStoredProfile();
+  const rows = await supabaseFetch<Array<{ id: string }>>("ct_print_jobs", {
+    method: "POST",
+    prefer: "return=representation",
+    body: JSON.stringify({
+      action: input.action,
+      ti_no: input.ti_no ?? null,
+      item_code: input.item_code,
+      serial_start: input.serial_start ?? null,
+      label_count: input.label_count ?? null,
+      btw_base64: input.btw_base64 ?? null,
+      created_by: profile?.id ?? null,
+      created_by_initials: profile?.initials ?? null,
+    }),
+  });
+  return rows[0];
 }
 
 function filterTiRecords(records: TiRecord[], filters: ListFilters): TiRecord[] {
@@ -1616,9 +1847,15 @@ export function useUpdateWorkOrder() {
       setWorkOrders(records);
       return records[index];
     },
-    onSuccess: () => {
+    onSuccess: (record) => {
       queryClient.invalidateQueries({ queryKey: ["work-orders"] });
       queryClient.invalidateQueries({ queryKey: ["work-order-ti-preview"] });
+      // A linked pending TI may have been auto re-synced — refresh TI views.
+      queryClient.invalidateQueries({ queryKey: ["ti-records"] });
+      queryClient.invalidateQueries({ queryKey: ["ti-status-counts"] });
+      if (record?.ti_no) {
+        queryClient.invalidateQueries({ queryKey: getGetTiRecordQueryKey(record.ti_no) });
+      }
     },
   });
 }
@@ -1745,6 +1982,79 @@ export function useReopenTiRecord() {
       queryClient.invalidateQueries({ queryKey: ["ti-records"] });
       queryClient.invalidateQueries({ queryKey: ["ti-adjacent"] });
       queryClient.invalidateQueries({ queryKey: ["ti-status-counts"] });
+    },
+  });
+}
+
+export function useTiLabelStatus(
+  tiNo: string,
+  options?: { query?: { enabled?: boolean } }
+) {
+  return useQuery({
+    queryKey: ["ti-label-status", tiNo],
+    queryFn: () => fetchTiLabelStatus(tiNo),
+    enabled: options?.query?.enabled !== false && !!tiNo && isSupabaseConfigured,
+    retry: false,
+    staleTime: 0,
+  });
+}
+
+export function useSavedLabelExists(
+  itemCode: string,
+  options?: { query?: { enabled?: boolean } }
+) {
+  return useQuery({
+    queryKey: ["saved-label-exists", itemCode],
+    queryFn: () => fetchSavedLabelExists(itemCode),
+    enabled: options?.query?.enabled !== false && !!itemCode && isSupabaseConfigured,
+    retry: false,
+    staleTime: 0,
+    // Poll while no template exists yet, so Print appears once the agent saves it.
+    refetchInterval: (query) => (query.state.data ? false : 4000),
+  });
+}
+
+export function useReserveTiLabels() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ tiNo, itemCode, count }: { tiNo: string; itemCode: string; count: number }) => {
+      if (!isSupabaseConfigured) {
+        throw new Error("Label printing requires the online (Supabase) database.");
+      }
+      return reserveTiLabelsRequest(tiNo, itemCode, count);
+    },
+    onSuccess: (_result, { tiNo }) => {
+      queryClient.invalidateQueries({ queryKey: ["ti-label-status", tiNo] });
+      queryClient.invalidateQueries({ queryKey: getGetTiRecordQueryKey(tiNo) });
+      queryClient.invalidateQueries({ queryKey: ["ti-records"] });
+    },
+  });
+}
+
+export function useUnlockTiLabels() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ tiNo, newQty }: { tiNo: string; newQty?: number | null }) => {
+      if (!isSupabaseConfigured) {
+        throw new Error("Label unlocking requires the online (Supabase) database.");
+      }
+      return unlockTiLabelsRequest(tiNo, newQty);
+    },
+    onSuccess: (_result, { tiNo }) => {
+      queryClient.invalidateQueries({ queryKey: ["ti-label-status", tiNo] });
+      queryClient.invalidateQueries({ queryKey: getGetTiRecordQueryKey(tiNo) });
+      queryClient.invalidateQueries({ queryKey: ["ti-records"] });
+    },
+  });
+}
+
+export function useEnqueuePrintJob() {
+  return useMutation({
+    mutationFn: (input: PrintJobInput) => {
+      if (!isSupabaseConfigured) {
+        throw new Error("Sending labels to the printer requires the online (Supabase) database.");
+      }
+      return createPrintJob(input);
     },
   });
 }

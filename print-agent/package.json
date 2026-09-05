@@ -1,0 +1,10 @@
+{
+  "name": "ct-label-print-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local BarTender print agent for the CT-TI label print-lock.",
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "pako": "^1.0.11"
+  }
+}

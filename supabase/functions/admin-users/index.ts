@@ -1,6 +1,8 @@
 const CORS_ALLOW_HEADERS = "authorization, x-client-info, apikey, content-type";
 const CORS_ALLOW_METHODS = "POST, OPTIONS";
-const DEFAULT_ALLOWED_ORIGINS = ["https://ct-ti.vercel.app", "http://localhost:*", "http://127.0.0.1:*"];
+// Production default is the deployed app only. For local development, set the
+// APP_ALLOWED_ORIGINS env var (comma-separated, may include http://localhost:*).
+const DEFAULT_ALLOWED_ORIGINS = ["https://ct-ti.vercel.app"];
 const REQUEST_TIMEOUT_MS = 15_000;
 
 type AppRole = "viewer" | "user" | "checker" | "admin";
@@ -151,21 +153,16 @@ Deno.serve(async (request) => {
     if (!caller.ok) return json(401, { error: "Invalid access token" }, origin);
     const callerUser = await caller.json();
 
-    let callerProfiles = await supabaseFetch<Array<{ role: string; is_active: boolean }>>(
+    // Resolve the caller's role STRICTLY by auth user id. Do not fall back to an
+    // email match: a profile whose email coincides with the caller's could then
+    // lend its role to the caller (privilege escalation). The migration ensures
+    // every auth user has an id-matched profile.
+    const callerProfiles = await supabaseFetch<Array<{ role: string; is_active: boolean }>>(
       `/rest/v1/profiles?id=eq.${encodeURIComponent(callerUser.id)}&select=role,is_active&limit=1`,
       { method: "GET" },
       serviceRoleKey,
       supabaseUrl
     );
-
-    if (!callerProfiles.length && callerUser.email) {
-      callerProfiles = await supabaseFetch<Array<{ role: string; is_active: boolean }>>(
-        `/rest/v1/profiles?email=eq.${encodeURIComponent(String(callerUser.email).toLowerCase())}&select=role,is_active&limit=1`,
-        { method: "GET" },
-        serviceRoleKey,
-        supabaseUrl
-      );
-    }
 
     const callerProfile = callerProfiles[0];
     if (!callerProfile?.is_active || String(callerProfile.role || "").toLowerCase() !== "admin") {
@@ -206,22 +203,69 @@ Deno.serve(async (request) => {
         is_active: body.is_active ?? true,
       };
 
-      const profiles = await supabaseFetch<unknown[]>(
-        "/rest/v1/profiles?on_conflict=id",
-        {
-          method: "POST",
-          headers: { Prefer: "resolution=merge-duplicates,return=representation" },
-          body: JSON.stringify(profile),
-        },
-        serviceRoleKey,
-        supabaseUrl
-      );
+      try {
+        const profiles = await supabaseFetch<unknown[]>(
+          "/rest/v1/profiles?on_conflict=id",
+          {
+            method: "POST",
+            headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+            body: JSON.stringify(profile),
+          },
+          serviceRoleKey,
+          supabaseUrl
+        );
 
-      return json(200, { profile: profiles[0] }, origin);
+        return json(200, { profile: profiles[0] }, origin);
+      } catch (profileError) {
+        // The auth user was created but the profile write failed. Roll back the
+        // orphaned auth user so create stays atomic and can be safely retried.
+        try {
+          await supabaseFetch(
+            `/auth/v1/admin/users/${encodeURIComponent(created.id)}`,
+            { method: "DELETE" },
+            serviceRoleKey,
+            supabaseUrl
+          );
+        } catch {
+          // Best effort cleanup; surface the original error below.
+        }
+        throw profileError;
+      }
     }
 
     if (body.action === "update") {
       if (!body.id) return json(400, { error: "User id is required" }, origin);
+
+      // Guard against locking everyone out: block demoting or deactivating the
+      // last remaining active admin.
+      const wouldRemoveAdmin =
+        (typeof body.role === "string" && normalizeRole(body.role) !== "admin") ||
+        body.is_active === false;
+      if (wouldRemoveAdmin) {
+        const [target] = await supabaseFetch<Array<{ role: string; is_active: boolean }>>(
+          `/rest/v1/profiles?id=eq.${encodeURIComponent(body.id)}&select=role,is_active&limit=1`,
+          { method: "GET" },
+          serviceRoleKey,
+          supabaseUrl
+        );
+        const targetIsActiveAdmin =
+          target && String(target.role || "").toLowerCase() === "admin" && target.is_active === true;
+        if (targetIsActiveAdmin) {
+          const otherActiveAdmins = await supabaseFetch<Array<{ id: string }>>(
+            `/rest/v1/profiles?role=eq.admin&is_active=eq.true&id=neq.${encodeURIComponent(body.id)}&select=id&limit=1`,
+            { method: "GET" },
+            serviceRoleKey,
+            supabaseUrl
+          );
+          if (!otherActiveAdmins.length) {
+            return json(
+              400,
+              { error: "Cannot demote or deactivate the last active admin." },
+              origin
+            );
+          }
+        }
+      }
 
       const patch: Record<string, unknown> = {};
       if (typeof body.full_name === "string") {

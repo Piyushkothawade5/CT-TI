@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Local tooling / editor
+.claude/
+.vscode/
+.idea/
+
+# npm lockfile (this project uses bun.lock)
+package-lock.json
+
+# Logs / OS
+*.log
+.DS_Store
+Thumbs.db
