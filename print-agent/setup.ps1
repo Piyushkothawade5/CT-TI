@@ -76,11 +76,21 @@ New-Item -ItemType Directory -Force -Path "C:\CTLabels\.work" | Out-Null
 Write-Host "Wrote config.json and created C:\CTLabels."
 
 # ---- 5. scheduled task: auto-start at every logon ----
+# setup.bat runs ELEVATED, so $env:USERNAME can be an admin account that is NOT the
+# operator actually logged on at the machine. Binding the task to that admin means it
+# never runs in the operator's interactive session, so BarTender never opens - even
+# though running print-agent.ps1 by hand (as the operator) works fine. Bind the task
+# to the real console/interactive user instead.
+$consoleUser = $null
+try { $consoleUser = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName } catch {}
+if (-not $consoleUser) { $consoleUser = "$env:USERDOMAIN\$env:USERNAME" }
+Write-Host ("Auto-start account (the logged-in operator): " + $consoleUser)
+
 $psExe   = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 $agentPs = Join-Path $here "print-agent.ps1"
 $action    = New-ScheduledTaskAction -Execute $psExe -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Minimized -File `"$agentPs`"" -WorkingDirectory $here
-$trigger   = New-ScheduledTaskTrigger -AtLogOn
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+$trigger   = New-ScheduledTaskTrigger -AtLogOn -User $consoleUser
+$principal = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Limited
 $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 Write-Host "Registered scheduled task '$taskName' - it now starts automatically at every logon." -ForegroundColor Green
