@@ -49,7 +49,7 @@ create index if not exists ct_ti_label_batches_serial_start_idx on public.ct_ti_
 -- ---------------------------------------------------------------------------
 create table if not exists public.ct_print_jobs (
   id uuid primary key default gen_random_uuid(),
-  action text not null check (action in ('save', 'print')),
+  action text not null check (action in ('save', 'print', 'edit')),
   ti_no text,
   item_code text not null,
   serial_start text,

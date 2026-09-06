@@ -174,7 +174,7 @@ export interface ReserveLabelsResult {
   remaining: number;
 }
 
-export type PrintJobAction = "save" | "print";
+export type PrintJobAction = "save" | "print" | "edit";
 
 export interface PrintJobInput {
   action: PrintJobAction;

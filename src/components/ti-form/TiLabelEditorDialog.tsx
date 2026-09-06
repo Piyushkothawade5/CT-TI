@@ -1,5 +1,5 @@
 import React from "react";
-import { Loader2, Printer, Save, Lock, Unlock } from "lucide-react";
+import { Loader2, Printer, Save, Lock, Unlock, Pencil } from "lucide-react";
 import type { TiRecordInput } from "@/api-client";
 import {
   useTiLabelStatus,
@@ -62,7 +62,7 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
   const isAdmin = role === "admin";
 
   const [row, setRow] = React.useState<BarTenderLabelRow | null>(null);
-  const [busy, setBusy] = React.useState<null | "save" | "print" | "unlock">(null);
+  const [busy, setBusy] = React.useState<null | "save" | "edit" | "print" | "unlock">(null);
   const [printQty, setPrintQty] = React.useState(1);
 
   const tiNo = String(data?.ti_no || "");
@@ -136,6 +136,29 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
       onOpenChange(false);
     } catch (error) {
       toast({ variant: "destructive", title: "Save failed", description: getErrorMessage(error) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleEditLabel = async () => {
+    if (!itemCode) {
+      toast({ variant: "destructive", title: "Missing item code", description: "This TI has no item code to locate the saved label." });
+      return;
+    }
+    setBusy("edit");
+    try {
+      // 'edit' opens the EXISTING saved template on the print PC in place - no
+      // payload is sent and the saved .btw is never overwritten. The operator
+      // corrects it and presses Ctrl+S to keep the changes.
+      await enqueueJob.mutateAsync({ action: "edit", ti_no: tiNo, item_code: itemCode });
+      toast({
+        title: "Opening on the print PC",
+        description: "The saved label will open in BarTender — correct it, then press Ctrl+S to keep your changes.",
+      });
+      onOpenChange(false);
+    } catch (error) {
+      toast({ variant: "destructive", title: "Edit failed", description: getErrorMessage(error) });
     } finally {
       setBusy(null);
     }
@@ -294,10 +317,17 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
           )}
           {canPrint && (
             <>
-              <Button variant="outline" onClick={handleSaveLabel} disabled={!row || busy != null}>
-                {busy === "save" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                {templateExists ? "Re-save Label" : "Save Label"}
-              </Button>
+              {templateExists ? (
+                <Button variant="outline" onClick={handleEditLabel} disabled={busy != null}>
+                  {busy === "edit" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Pencil className="mr-2 h-4 w-4" />}
+                  Edit Label
+                </Button>
+              ) : (
+                <Button variant="outline" onClick={handleSaveLabel} disabled={!row || busy != null}>
+                  {busy === "save" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                  Save Label
+                </Button>
+              )}
               {templateExists && (
                 <Button
                   className="bg-[#2a4080] hover:bg-[#22366f]"

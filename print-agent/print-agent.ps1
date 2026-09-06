@@ -125,6 +125,23 @@ function Invoke-SaveJob {
   Write-Host "[save] $($Job.item_code) -> $target (opened in BarTender)"
 }
 
+# Open the ALREADY-SAVED template in BarTender for correction, in place. Unlike
+# 'save', this ships no payload and never overwrites the file - the operator edits
+# and presses Ctrl+S to keep the changes in the same .btw at the same path.
+function Invoke-EditJob {
+  param($Job)
+  $safe = Get-SafeItemCode $Job.item_code
+  $label = Join-Path (Join-Path $cfg.libraryDir $safe) "$safe.btw"
+  if (-not (Test-Path $label)) {
+    Set-JobStatus -Id $Job.id -Status "error" -ErrorText "No saved label for item code $($Job.item_code). Use 'Save Label' first."
+    Write-Host "[edit] no saved label for $($Job.item_code)"
+    return
+  }
+  Open-InBarTender $label
+  Set-JobStatus -Id $Job.id -Status "opened"
+  Write-Host "[edit] $($Job.item_code) -> $label (opened in BarTender for editing)"
+}
+
 # Headless print via BarTender XML Script: opens the work file and prints one job of
 # `Count` serialized labels (BarTender increments the serial across them). Detects and
 # reports a BarTender error dialog instead of hanging.
@@ -248,6 +265,7 @@ while ($true) {
     foreach ($job in $jobs) {
       try {
         if ($job.action -eq "save") { Invoke-SaveJob $job }
+        elseif ($job.action -eq "edit") { Invoke-EditJob $job }
         elseif ($job.action -eq "print") { Invoke-PrintJob $job }
         else { Set-JobStatus -Id $job.id -Status "error" -ErrorText "Unknown action $($job.action)" }
       } catch {
