@@ -1,9 +1,9 @@
 import React from "react";
-import { Loader2, Printer, Save, Lock, Unlock } from "lucide-react";
+import { Loader2, Printer, Save, Lock, Unlock, Pencil } from "lucide-react";
 import type { TiRecordInput } from "@/api-client";
 import {
   useTiLabelStatus,
-  useReserveTiLabels,
+  useBeginPrint,
   useUnlockTiLabels,
   useEnqueuePrintJob,
   useSavedLabelExists,
@@ -62,15 +62,14 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
   const isAdmin = role === "admin";
 
   const [row, setRow] = React.useState<BarTenderLabelRow | null>(null);
-  const [busy, setBusy] = React.useState<null | "save" | "print" | "unlock">(null);
-  const [printQty, setPrintQty] = React.useState(1);
+  const [busy, setBusy] = React.useState<null | "save" | "edit" | "print" | "unlock">(null);
 
   const tiNo = String(data?.ti_no || "");
   const itemCode = String(data?.item_no || data?.cust_part_code || "").trim();
 
   const labelStatus = useTiLabelStatus(tiNo, { query: { enabled: open && !!tiNo } });
   const savedExists = useSavedLabelExists(itemCode, { query: { enabled: open && !!itemCode } });
-  const reserveLabels = useReserveTiLabels();
+  const beginPrint = useBeginPrint();
   const unlockLabels = useUnlockTiLabels();
   const enqueueJob = useEnqueuePrintJob();
 
@@ -78,20 +77,13 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
   const status = labelStatus.data;
   const qty = status?.label_qty ?? parseQtyText(status?.quantity);
   const issued = status?.labels_issued ?? 0;
-  const reserved = status?.labels_reserved ?? 0;
-  // Remaining excludes both printed (issued) and in-flight (reserved) labels.
-  const remaining = qty != null ? Math.max(qty - issued - reserved, 0) : null;
+  const remaining = qty != null ? Math.max(qty - issued, 0) : null;
   const locked = Boolean(status?.labels_locked);
 
   React.useEffect(() => {
     if (!open || !data) return;
     setRow(buildBarTenderLabelRows(data)[0] || null);
   }, [data, open]);
-
-  React.useEffect(() => {
-    if (remaining == null) return;
-    setPrintQty(remaining > 0 ? remaining : 0);
-  }, [remaining]);
 
   const tapRowCount = row?.tapRows.filter(Boolean).length || 0;
 
@@ -141,6 +133,25 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
     }
   };
 
+  const handleEdit = async () => {
+    if (!itemCode) return;
+    setBusy("edit");
+    try {
+      // Open the EXISTING saved label for this item code in BarTender (no regeneration),
+      // so the operator can adjust it and Ctrl+S back to the same file.
+      await enqueueJob.mutateAsync({ action: "edit", ti_no: tiNo, item_code: itemCode });
+      toast({
+        title: "Opening saved label to edit",
+        description: "The print PC will open the saved label in BarTender — adjust it, then press Ctrl+S.",
+      });
+      onOpenChange(false);
+    } catch (error) {
+      toast({ variant: "destructive", title: "Edit failed", description: getErrorMessage(error) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const handlePrint = async () => {
     if (!data || !tiNo) return;
     if (!itemCode) {
@@ -151,20 +162,19 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
       toast({ variant: "destructive", title: "No saved template", description: "Save the label template for this item code first, then print." });
       return;
     }
-    if (!printQty || printQty < 1) return;
     setBusy("print");
     try {
-      // reserve_ti_labels allocates the serials, reserves them against the quota,
-      // and queues the print job atomically. The count is only committed once the
-      // agent confirms the print (a failed print releases the reservation).
-      const result = await reserveLabels.mutateAsync({ tiNo, itemCode, count: printQty });
+      // begin_print opens a print session (fixes the starting serial + queues the
+      // job). The agent opens the label in BarTender; the operator prints, and the
+      // ACTUAL number of labels the printer produced is read back and counted here.
+      const result = await beginPrint.mutateAsync({ tiNo, itemCode });
       toast({
-        title: `Printing ${result.count} label(s)`,
-        description: `Serials ${result.serial_start} – ${result.serial_end}. ${result.remaining} remaining. The count updates once the printer confirms.`,
+        title: "Label sent to BarTender",
+        description: `Starts at serial ${result.serial_start}. Print up to ${result.remaining}. The actual printed count updates here automatically.`,
       });
       await labelStatus.refetch();
     } catch (error) {
-      toast({ variant: "destructive", title: "Print failed", description: getErrorMessage(error) });
+      toast({ variant: "destructive", title: "Could not start printing", description: getErrorMessage(error) });
     } finally {
       setBusy(null);
     }
@@ -196,9 +206,6 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
             <div className="text-sm">
               <span className="font-semibold text-[#2a4080]">{issued}</span>
               <span className="text-gray-500"> / {qty ?? "—"} printed</span>
-              {reserved > 0 && (
-                <span className="ml-2 text-amber-600">{reserved} printing…</span>
-              )}
               {remaining != null && (
                 <span className="ml-2 text-gray-500">({remaining} remaining)</span>
               )}
@@ -207,21 +214,6 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
               <span className="inline-flex items-center gap-1 rounded bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
                 <Lock className="h-3 w-3" /> Locked — admin must unlock
               </span>
-            )}
-            {canPrint && templateExists && !locked && remaining != null && remaining > 0 && (
-              <div className="flex items-center gap-2">
-                <Label className="text-xs font-semibold uppercase text-gray-600">Print now</Label>
-                <Input
-                  type="number"
-                  min={1}
-                  max={remaining}
-                  value={printQty}
-                  onChange={(event) =>
-                    setPrintQty(Math.max(1, Math.min(remaining, Number(event.target.value) || 1)))
-                  }
-                  className="h-8 w-20"
-                />
-              </div>
             )}
             {canPrint && !savedExists.isLoading && !templateExists && (
               <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
@@ -294,15 +286,22 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
           )}
           {canPrint && (
             <>
-              <Button variant="outline" onClick={handleSaveLabel} disabled={!row || busy != null}>
-                {busy === "save" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                {templateExists ? "Re-save Label" : "Save Label"}
-              </Button>
+              {templateExists ? (
+                <Button variant="outline" onClick={handleEdit} disabled={busy != null}>
+                  {busy === "edit" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Pencil className="mr-2 h-4 w-4" />}
+                  Edit
+                </Button>
+              ) : (
+                <Button variant="outline" onClick={handleSaveLabel} disabled={!row || busy != null}>
+                  {busy === "save" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                  Save Label
+                </Button>
+              )}
               {templateExists && (
                 <Button
                   className="bg-[#2a4080] hover:bg-[#22366f]"
                   onClick={handlePrint}
-                  disabled={busy != null || locked || !remaining || printQty < 1}
+                  disabled={busy != null || locked || !remaining}
                 >
                   {busy === "print" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Printer className="mr-2 h-4 w-4" />}
                   Print

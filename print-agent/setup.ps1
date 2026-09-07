@@ -41,6 +41,8 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
   throw "Node.js is still not available. Install Node.js LTS from https://nodejs.org and re-run setup.bat."
 }
 Write-Host ("Node: " + (node -v))
+$nodeExe = (Get-Command node -ErrorAction SilentlyContinue).Source
+if (-not $nodeExe) { $nodeExe = "node" }
 
 # ---- 2. dependencies ----
 Write-Host "Installing agent dependencies (npm install)..."
@@ -62,7 +64,7 @@ $cfg = [ordered]@{
   agentEmail          = $agentEmail
   agentPassword       = $agentPassword
   bartendExe          = $bartend
-  nodeExe             = "node"
+  nodeExe             = $nodeExe
   libraryDir          = "C:\CTLabels"
   tempDir             = "C:\CTLabels\.work"
   printerName         = $printer
@@ -76,14 +78,23 @@ New-Item -ItemType Directory -Force -Path "C:\CTLabels\.work" | Out-Null
 Write-Host "Wrote config.json and created C:\CTLabels."
 
 # ---- 5. scheduled task: auto-start at every logon ----
+# CRITICAL: the task must run as the operator actually logged in AT THE MACHINE, on
+# their interactive desktop - not whatever admin account approved the UAC prompt for
+# setup.bat. Otherwise the task fires on the wrong account's logon and BarTender never
+# opens on the operator's screen (while a manual run as the operator works fine).
+$consoleUser = $null
+try { $consoleUser = (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).UserName } catch {}
+if (-not $consoleUser) { $consoleUser = "$env:USERDOMAIN\$env:USERNAME" }
+Write-Host ("Auto-start will run as the logged-in user: " + $consoleUser) -ForegroundColor Cyan
+
 $psExe   = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 $agentPs = Join-Path $here "print-agent.ps1"
 $action    = New-ScheduledTaskAction -Execute $psExe -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Minimized -File `"$agentPs`"" -WorkingDirectory $here
-$trigger   = New-ScheduledTaskTrigger -AtLogOn
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+$trigger   = New-ScheduledTaskTrigger -AtLogOn -User $consoleUser
+$principal = New-ScheduledTaskPrincipal -UserId $consoleUser -LogonType Interactive -RunLevel Limited
 $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-Write-Host "Registered scheduled task '$taskName' - it now starts automatically at every logon." -ForegroundColor Green
+Write-Host "Registered scheduled task '$taskName' for $consoleUser - starts automatically at that user's logon." -ForegroundColor Green
 
 # ---- 6. start it now ----
 Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue

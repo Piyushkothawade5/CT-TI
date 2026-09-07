@@ -12,32 +12,33 @@ queue and, for each job:
 - **`save`** — writes the rough `.btw` into `C:\CTLabels\<itemCode>\<itemCode>.btw` and
   opens it in BarTender. You correct the label and press **Ctrl+S** to freeze it. That
   saved file is reused for every future TI with the same item code.
-- **`print`** — copies the saved item-code label to a temp working file, then
-  `patch-serial.js` **injects the TI's starting serial**. Then (auto mode) it prints via
-  **BarTender XML Script** (`bartend.exe /XMLScript=…`) with `<NumberSerializedLabels>qty</…>`
-  — a **single** headless job that produces all `qty` labels, BarTender incrementing the
-  serial across them (e.g. 300 labels = one job, not 300). The temp file is deleted afterward.
+- **`print`** — copies the saved item-code label to a temp working file (named with the
+  print job's unique GUID), then `patch-serial.js` **injects the TI's starting serial**, opens
+  the label in BarTender, and **watches the Windows spooler to read how many labels were
+  actually printed** — counting only spool jobs whose DocumentName carries our GUID (so other
+  apps'/operators' jobs on the same printer are ignored). That real count is what gets recorded.
 
-Quota is **reserve → confirm**: clicking Print calls `reserve_ti_labels`, which reserves the
-serial range against the TI quantity and queues the job. The count is only *committed* against
-the TI when this agent reports the job `done` (a DB trigger moves reserved→issued); if the job
-ends in `error`, the reservation is released, so **a failed print never consumes quota**. Once a
-TI's printed count reaches its quantity it locks; an **admin** unlocks it in the webapp.
+Quota model — **record the actual printed count** (never a number typed in the app):
+clicking Print calls `begin_print`, which fixes the starting serial and queues the job (one
+print session per TI at a time). The operator sets the quantity in BarTender's dialog and
+prints; the agent reads the real number the printer produced and reports it, and a DB trigger
+commits exactly that many against the TI. If nothing prints, nothing is counted. When the TI's
+printed count reaches its quantity it locks; an **admin** unlocks it in the webapp. The webapp
+status auto-refreshes, so the count appears there a few seconds after printing.
 
-## Print modes (`autoPrint` in config.json)
+## Why manual mode (BarTender edition)
 
-- **`autoPrint: true`** (default) — fully headless: inject the serial, then one
-  **XML Script** job (`/XMLScript`) prints all `qty` serialized labels. Nothing opens on
-  screen, the operator can't touch the serial, and 300 labels is one job. If BarTender
-  raises an error dialog (e.g. wrong/missing printer), the agent reads it, kills BarTender,
-  and marks the job `error` — it never leaves a batch half-printed or hanging.
-- **`autoPrint: false`** — manual: the agent opens the label in BarTender with the serial
-  injected; the operator sets the quantity in the Print dialog and clicks **Print**.
+Fully-headless auto-printing needs BarTender **Automation edition** (command-line/`/XMLScript`).
+Basic/Professional (or an expired Automation trial) reject it with **error #3112**, so the shop
+runs **manual mode**: the agent opens the label, the operator prints, and the agent reads the
+actual count. (`autoPrint: true` + `Invoke-XmlScriptPrint` remain in the agent for a future
+Automation-edition upgrade, but are dormant unless a job carries a target count.)
 
-**The label must have serialization turned ON** on the `Sr No` field, or BarTender ignores
-the quantity and prints 1. Enable it once when you first correct/save each template.
-
-The real "can't exceed qty" cap is always the **server quota**, independent of print mode.
+**Requirements for a correct count:**
+- **`printerName` in config.json is required** and must match the printer the operator actually
+  prints to (the agent reads *that* printer's spooler). setup.bat auto-detects the SATO.
+- **The label must have serialization turned ON** on the `Sr No` field (else BarTender won't let
+  the operator print more than 1). Enable it once when first correcting/saving each template.
 
 ## Printer setup — REQUIRED (avoids "demonstration mode")
 

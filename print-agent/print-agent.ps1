@@ -109,7 +109,11 @@ function Get-SafeItemCode {
 
 function Open-InBarTender {
   param([string]$FilePath)
-  Start-Process -FilePath $cfg.bartendExe -ArgumentList "/F=`"$FilePath`"" | Out-Null
+  # Open via the file association (like double-clicking the .btw) so BarTender adds
+  # the document to its existing session rather than replacing/closing other open
+  # labels. Fall back to the /F= switch if the association isn't wired up.
+  try { Start-Process -FilePath $FilePath | Out-Null }
+  catch { Start-Process -FilePath $cfg.bartendExe -ArgumentList "/F=`"$FilePath`"" | Out-Null }
 }
 
 function Invoke-SaveJob {
@@ -125,25 +129,91 @@ function Invoke-SaveJob {
   Write-Host "[save] $($Job.item_code) -> $target (opened in BarTender)"
 }
 
-# Headless print via BarTender XML Script: opens the work file and prints one job of
-# `Count` serialized labels (BarTender increments the serial across them). Detects and
-# reports a BarTender error dialog instead of hanging.
-function Get-SpoolJobIds {
-  param([string]$Printer)
-  try { return @(Get-PrintJob -PrinterName $Printer -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id) } catch { return @() }
+# 'edit' opens the EXISTING saved label for the item code (no regeneration), so the
+# operator can adjust it and Ctrl+S back to the same file.
+function Invoke-EditJob {
+  param($Job)
+  $safe = Get-SafeItemCode $Job.item_code
+  $target = Join-Path (Join-Path $cfg.libraryDir $safe) "$safe.btw"
+  if (-not (Test-Path $target)) {
+    Set-JobStatus -Id $Job.id -Status "error" -ErrorText "No saved label to edit for item code $($Job.item_code)."
+    Write-Host "[edit] no saved label for $($Job.item_code)"
+    return
+  }
+  Open-InBarTender $target
+  Set-JobStatus -Id $Job.id -Status "saved"
+  Write-Host "[edit] $($Job.item_code) -> $target (opened for editing)"
 }
 
-# Print via XML Script and CONFIRM it before returning: a print counts only if a
-# job actually reached the target printer's spooler (or BarTender raised an error,
-# in which case we throw so the caller releases the reservation). No printer / no
-# spooled job / an error dialog => throw => nothing is counted.
+# ---- print helpers: read the ACTUAL printed count from the Windows spooler ----
+
+function Set-JobResult {
+  param([string]$Id, [int]$Count, [string]$Status, [string]$ErrorText)
+  $payload = @{ status = $Status; label_count = $Count }
+  if ($ErrorText) { $payload["error"] = $ErrorText.Substring(0, [Math]::Min(500, $ErrorText.Length)) }
+  Invoke-Rest -Method Patch -Path "ct_print_jobs?id=eq.$Id" -Body ($payload | ConvertTo-Json) -Prefer "return=minimal" | Out-Null
+}
+
+# Sum pages of spooler jobs that are OURS only. We name the working file with the
+# print job's unique GUID, so BarTender's spool DocumentName carries that GUID —
+# jobs from other apps/operators on the same printer are ignored. $Seen maps
+# jobId -> pages; returns $true if a new OUR job appeared this call.
+function Update-OurSpool {
+  param([string]$Printer, [string]$DocToken, [hashtable]$Seen)
+  $found = $false
+  try {
+    foreach ($j in Get-PrintJob -PrinterName $Printer -ErrorAction SilentlyContinue) {
+      $doc = [string]$j.DocumentName
+      if (-not ($doc -and $doc.Contains($DocToken))) { continue }   # not our job -> ignore
+      $id = [string]$j.Id
+      $pages = [int]$j.TotalPages; if ($pages -lt 1) { $pages = 1 }
+      if (-not $Seen.ContainsKey($id)) { $Seen[$id] = $pages; $found = $true; Write-Host "[print]   our spool job '$doc' pages=$pages" }
+      elseif ($pages -gt $Seen[$id]) { $Seen[$id] = $pages }
+    }
+  } catch {}
+  return $found
+}
+
+function Get-SeenTotal { param([hashtable]$Seen) $s = 0; foreach ($v in $Seen.Values) { $s += $v }; return $s }
+
+function Get-BarTenderDocOpen {
+  param([string]$DocToken)
+  try {
+    $t = (Get-Process bartend -ErrorAction SilentlyContinue | Select-Object -First 1).MainWindowTitle
+    return [bool]($t -and $t.Contains($DocToken))
+  } catch { return $false }
+}
+
+# Manual mode: the operator prints in BarTender; we watch the spooler for OUR job(s)
+# during the session and return the ACTUAL number of labels produced. Ends when the
+# doc is closed, or after a quiet period following a print, or a hard cap.
+function Get-ManualPrintCount {
+  param([string]$Printer, [string]$DocToken)
+  $seen = @{}
+  $started = Get-Date
+  $lastNew = $null
+  $maxSeconds = 600
+  $quietSeconds = 25
+  while (((Get-Date) - $started).TotalSeconds -lt $maxSeconds) {
+    Start-Sleep -Milliseconds 700
+    if (Update-OurSpool $Printer $DocToken $seen) { $lastNew = Get-Date }
+    $docOpen = Get-BarTenderDocOpen $DocToken
+    if (-not $docOpen -and $seen.Count -gt 0) { break }                                                   # printed, then closed
+    if ($lastNew -and ((Get-Date) - $lastNew).TotalSeconds -gt $quietSeconds) { break }                    # printed, then idle
+    if (-not $docOpen -and $seen.Count -eq 0 -and ((Get-Date) - $started).TotalSeconds -gt 20) { break }   # closed without printing
+  }
+  Start-Sleep -Milliseconds 600
+  Update-OurSpool $Printer $DocToken $seen | Out-Null
+  return (Get-SeenTotal $seen)
+}
+
+# Automation-edition path (headless): XML Script prints $Count labels; returns the
+# actual pages spooled for OUR job. Throws on a BarTender error/warning dialog.
 function Invoke-XmlScriptPrint {
   param([string]$WorkFile, [int]$Count)
-  if (-not $cfg.printerName) {
-    throw "printerName is not set in config.json. It is required to confirm a print before counting it - set it to the SATO printer's exact Windows name."
-  }
   $printer = $cfg.printerName
-  $btxml = Join-Path $cfg.tempDir ("job-" + [IO.Path]::GetFileNameWithoutExtension($WorkFile) + ".btxml")
+  $docToken = [IO.Path]::GetFileNameWithoutExtension($WorkFile)
+  $btxml = Join-Path $cfg.tempDir ("job-" + $docToken + ".btxml")
   $doc = @"
 <?xml version="1.0" encoding="utf-8"?>
 <XMLScript Version="2.0">
@@ -160,40 +230,34 @@ function Invoke-XmlScriptPrint {
 </XMLScript>
 "@
   [IO.File]::WriteAllText($btxml, $doc, (New-Object System.Text.UTF8Encoding($false)))
-
-  $before = Get-SpoolJobIds $printer
+  $seen = @{}
   $p = Start-Process -FilePath $cfg.bartendExe -ArgumentList "/XMLScript=`"$btxml`"" -PassThru
   $deadline = (Get-Date).AddSeconds([int]$cfg.printTimeoutSeconds)
-  $spooled = $false
   $errText = $null
   try {
     while ((Get-Date) -lt $deadline) {
       Start-Sleep -Milliseconds 500
-      $errText = [BtWin]::FindError()
-      if ($errText) { break }
-      if ((Get-SpoolJobIds $printer | Where-Object { $before -notcontains $_ }).Count -gt 0) { $spooled = $true; break }
-      if ($p.HasExited) {
-        if ((Get-SpoolJobIds $printer | Where-Object { $before -notcontains $_ }).Count -gt 0) { $spooled = $true }
-        break
-      }
+      $errText = [BtWin]::FindError(); if ($errText) { break }
+      Update-OurSpool $printer $docToken $seen | Out-Null
+      if ($p.HasExited) { Start-Sleep -Milliseconds 800; Update-OurSpool $printer $docToken $seen | Out-Null; break }
+      if ((Get-SeenTotal $seen) -gt 0) { break }
     }
-  } finally {
-    Remove-Item $btxml -Force -ErrorAction SilentlyContinue
-  }
-
+  } finally { Remove-Item $btxml -Force -ErrorAction SilentlyContinue }
   if ($errText) {
     try { $p | Stop-Process -Force } catch {}
     Get-Process bartend -ErrorAction SilentlyContinue | Stop-Process -Force
     throw "BarTender did not print (nothing counted): $errText"
   }
-  if (-not $spooled) {
-    try { if (-not $p.HasExited) { $p | Stop-Process -Force } } catch {}
-    throw "Print not confirmed - no job reached printer '$printer' within $($cfg.printTimeoutSeconds)s. Nothing counted."
-  }
+  return (Get-SeenTotal $seen)
 }
 
 function Invoke-PrintJob {
   param($Job)
+  if (-not $cfg.printerName) {
+    Set-JobStatus -Id $Job.id -Status "error" -ErrorText "printerName is not set in config.json - required to read the actual printed count. Set it to the SATO printer's exact Windows name."
+    Write-Host "[print] printerName not set; cannot read printed count"
+    return
+  }
   $safe = Get-SafeItemCode $Job.item_code
   $label = Join-Path (Join-Path $cfg.libraryDir $safe) "$safe.btw"
   if (-not (Test-Path $label)) {
@@ -204,28 +268,34 @@ function Invoke-PrintJob {
   New-Item -ItemType Directory -Force -Path $cfg.tempDir | Out-Null
   $work = Join-Path $cfg.tempDir "$($Job.id).btw"
   Copy-Item -Path $label -Destination $work -Force
-
-  $count = [int]$Job.label_count; if ($count -lt 1) { $count = 1 }
   $start = "$($Job.serial_start)"
 
-  # Inject the starting serial into the working copy. The batch quantity is applied
-  # at print time via XML Script (NumberSerializedLabels), not baked into the file.
+  # Inject the starting serial; BarTender serializes upward from it as labels print.
   & $cfg.nodeExe $patchScript $work $start | Out-Null
   $code = $LASTEXITCODE
   if ($code -eq 2) { throw "The saved label has no 'Sr No' serial field to inject. Keep that field on the label." }
   elseif ($code -ne 0) { throw "Serial injection failed (exit $code)." }
 
-  if ($cfg.autoPrint) {
-    # One XML Script job prints all `count` serialized labels headlessly.
-    Invoke-XmlScriptPrint $work $count
+  if ($cfg.autoPrint -and $Job.label_count) {
+    # Automation-edition headless path (only used if a job carries a target count).
+    $actual = Invoke-XmlScriptPrint $work ([int]$Job.label_count)
     Remove-Item $work -Force -ErrorAction SilentlyContinue
-    Set-JobStatus -Id $Job.id -Status "done"
-    Write-Host "[print] $($Job.item_code) DONE x$count start=$start (single XML Script job)"
   } else {
-    # Manual mode: open in BarTender with the serial injected; operator sets qty and prints.
+    # Manual mode: open the label; the operator sets the quantity and prints. We then
+    # read the ACTUAL number of labels the printer produced from the spooler.
     Open-InBarTender $work
     Set-JobStatus -Id $Job.id -Status "opened"
-    Write-Host "[print] $($Job.item_code) x$count start=$start (opened in BarTender - manual mode)"
+    Write-Host "[print] $($Job.item_code) opened in BarTender (start=$start) - watching '$($cfg.printerName)' for actual count..."
+    $actual = Get-ManualPrintCount $cfg.printerName ([IO.Path]::GetFileNameWithoutExtension($work))
+    Remove-Item $work -Force -ErrorAction SilentlyContinue
+  }
+
+  if ($actual -gt 0) {
+    Set-JobResult -Id $Job.id -Count $actual -Status "done"
+    Write-Host "[print] $($Job.item_code) DONE - $actual label(s) actually printed (start=$start)"
+  } else {
+    Set-JobResult -Id $Job.id -Count 0 -Status "error" -ErrorText "No labels were printed to '$($cfg.printerName)'."
+    Write-Host "[print] $($Job.item_code) - nothing printed"
   }
 }
 
@@ -237,10 +307,24 @@ function Remove-StaleTempFiles {
     ForEach-Object { try { Remove-Item $_.FullName -Force } catch {} }
 }
 
+# A print session left 'opened' can only be a leftover from a previous agent run
+# (this is the single print PC). Clear them so begin_print's in-progress guard
+# doesn't block the TI forever. The count for those sessions is unknown -> operator
+# reprints if needed; admin can unlock.
+function Clear-StaleOpenJobs {
+  try {
+    $stale = Invoke-Rest -Method Get -Path "ct_print_jobs?action=eq.print&status=eq.opened&select=id"
+    foreach ($j in $stale) {
+      Set-JobStatus -Id $j.id -Status "error" -ErrorText "Agent restarted while this print session was open; printed count was not recorded. Reprint if needed."
+      Write-Host "[startup] cleared stale open print session $($j.id)"
+    }
+  } catch { Write-Warning "stale-job cleanup failed: $($_.Exception.Message)" }
+}
+
 Write-Host "CT-TI print agent starting. Library: $($cfg.libraryDir)  Poll: $($cfg.pollSeconds)s"
 # Initial sign-in, but a transient network/auth blip must NOT kill the agent -
 # Invoke-Rest re-authenticates lazily inside the loop, so just log and keep going.
-try { Get-AuthToken } catch { Write-Warning "initial sign-in failed: $($_.Exception.Message) - will retry while polling." }
+try { Get-AuthToken; Clear-StaleOpenJobs } catch { Write-Warning "initial sign-in failed: $($_.Exception.Message) - will retry while polling." }
 
 while ($true) {
   try {
@@ -248,6 +332,7 @@ while ($true) {
     foreach ($job in $jobs) {
       try {
         if ($job.action -eq "save") { Invoke-SaveJob $job }
+        elseif ($job.action -eq "edit") { Invoke-EditJob $job }
         elseif ($job.action -eq "print") { Invoke-PrintJob $job }
         else { Set-JobStatus -Id $job.id -Status "error" -ErrorText "Unknown action $($job.action)" }
       } catch {

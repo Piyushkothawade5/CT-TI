@@ -1,14 +1,17 @@
 -- Label print-lock + print-job queue  (consolidating migration — safe to re-run).
 --
--- Quota model (reserve → confirm):
---   * Clicking Print RESERVES the next serial range (labels_reserved++) and queues a
---     print job. Remaining = label_qty - labels_issued - labels_reserved, so an
---     operator can never request beyond the TI quantity.
---   * The agent prints, then sets the job status. A BEFORE-UPDATE trigger COMMITS the
---     reservation on success (status 'done'/'opened' -> labels_issued++, lock if full,
---     record the batch) or RELEASES it on failure (status 'error' -> labels_reserved--).
---   * So a failed print never consumes quota, and the count only moves after a
---     confirmed print. Only an admin can unlock a fully-printed TI.
+-- Quota model — record the ACTUAL printed count (BarTender edition blocks headless
+-- command-line printing, so the shop runs manual mode):
+--   * Clicking Print calls begin_print(): it fixes the starting serial at the current
+--     printed offset and queues a 'print' job (one open session per TI at a time).
+--     No quantity is trusted from the app.
+--   * The agent opens the label in BarTender; the operator sets the quantity and prints.
+--     The agent reads how many labels actually reached the Windows spooler (its own job
+--     only) and PATCHes label_count = actual, status = 'done'.
+--   * The BEFORE-UPDATE trigger ct_apply_print_job commits that ACTUAL count on 'done'
+--     (labels_issued += actual, lock if full, record the batch); 'error'/zero records
+--     nothing. Only an admin can unlock a fully-printed TI.
+--   * labels_reserved is retained as a column but unused (always 0).
 --
 -- Run in the Supabase SQL editor after schema.sql.
 
@@ -49,7 +52,7 @@ create index if not exists ct_ti_label_batches_serial_start_idx on public.ct_ti_
 -- ---------------------------------------------------------------------------
 create table if not exists public.ct_print_jobs (
   id uuid primary key default gen_random_uuid(),
-  action text not null check (action in ('save', 'print')),
+  action text not null check (action in ('save', 'print', 'edit')),
   ti_no text,
   item_code text not null,
   serial_start text,
@@ -65,6 +68,9 @@ create table if not exists public.ct_print_jobs (
 alter table public.ct_print_jobs
   add column if not exists serial_end text,
   add column if not exists committed boolean not null default false;
+-- allow the 'edit' action on an already-created table (create-if-not-exists won't alter it)
+alter table public.ct_print_jobs drop constraint if exists ct_print_jobs_action_check;
+alter table public.ct_print_jobs add constraint ct_print_jobs_action_check check (action in ('save', 'print', 'edit'));
 
 create index if not exists ct_print_jobs_status_idx on public.ct_print_jobs (status);
 create index if not exists ct_print_jobs_created_at_idx on public.ct_print_jobs (created_at);
@@ -128,11 +134,17 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 5. reserve_ti_labels — reserve the next range + queue a print job (no commit yet)
+-- 5. begin_print — open a print session (fix start serial + queue job; no count yet)
 -- ---------------------------------------------------------------------------
 drop function if exists public.issue_ti_labels(text, integer);
 
-create or replace function public.reserve_ti_labels(p_ti_no text, p_item_code text, p_count integer)
+-- begin_print opens a print SESSION: it fixes the starting serial (at the current
+-- printed offset) and queues the job. It does NOT trust a typed quantity — the agent
+-- reports back the ACTUAL number of labels the printer produced, which the trigger
+-- below commits. One open session per TI at a time keeps serial ranges from overlapping.
+drop function if exists public.reserve_ti_labels(text, text, integer);
+
+create or replace function public.begin_print(p_ti_no text, p_item_code text)
 returns jsonb
 language plpgsql
 security definer
@@ -144,17 +156,12 @@ declare
   qty integer;
   remaining integer;
   seed text;
-  at_offset integer;
   serial_start text;
-  serial_end text;
   job_id uuid;
 begin
   select * into me from public.current_profile();
   if me.id is null or me.is_active is not true or lower(me.role) <> 'user' then
     raise exception 'User role required to print labels';
-  end if;
-  if p_count is null or p_count < 1 then
-    raise exception 'Print quantity must be at least 1';
   end if;
   if p_item_code is null or btrim(p_item_code) = '' then
     raise exception 'Item code is required';
@@ -168,43 +175,41 @@ begin
   qty := coalesce(rec.label_qty, nullif((regexp_match(coalesce(rec.quantity, ''), '[0-9]+'))[1], '')::integer);
   if qty is null or qty < 1 then raise exception 'Set a valid TI quantity before printing labels'; end if;
 
-  remaining := qty - rec.labels_issued - rec.labels_reserved;
-  if p_count > remaining then
-    raise exception 'Only % label(s) remaining for this TI', greatest(remaining, 0);
+  remaining := qty - rec.labels_issued;
+  if remaining <= 0 then raise exception 'All % label(s) for this TI have already been printed', qty; end if;
+
+  if exists (select 1 from public.ct_print_jobs
+             where ti_no = p_ti_no and action = 'print' and status in ('pending', 'opened')) then
+    raise exception 'A print for this TI is already in progress. Finish or close it first.';
   end if;
 
   seed := public.ct_label_serial_seed(rec.ti_no, rec.serial_number);
-  at_offset := rec.labels_issued + rec.labels_reserved;
-  serial_start := public.ct_label_serial_at(seed, at_offset);
-  serial_end := public.ct_label_serial_at(seed, at_offset + p_count - 1);
+  serial_start := public.ct_label_serial_at(seed, rec.labels_issued);
 
-  update public.ct_ti_records
-  set label_qty = qty,
-      labels_reserved = rec.labels_reserved + p_count
-  where id = rec.id;
+  update public.ct_ti_records set label_qty = qty where id = rec.id;
 
   insert into public.ct_print_jobs
-    (action, ti_no, item_code, serial_start, serial_end, label_count, status, created_by, created_by_initials)
+    (action, ti_no, item_code, serial_start, label_count, status, created_by, created_by_initials)
   values
-    ('print', rec.ti_no, p_item_code, serial_start, serial_end, p_count, 'pending', me.id, me.initials)
+    ('print', rec.ti_no, p_item_code, serial_start, null, 'pending', me.id, me.initials)
   returning id into job_id;
 
   return jsonb_build_object(
     'job_id', job_id,
     'serial_start', serial_start,
-    'serial_end', serial_end,
-    'count', p_count,
     'labels_issued', rec.labels_issued,
-    'labels_reserved', rec.labels_reserved + p_count,
     'label_qty', qty,
-    'remaining', remaining - p_count
+    'remaining', remaining
   );
 end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 6. Commit/release trigger — moves the reservation when the agent reports back
+-- 6. Commit trigger — records the ACTUAL printed count the agent reports
 -- ---------------------------------------------------------------------------
+-- The agent sets label_count to the number of labels the Windows spooler actually
+-- produced, then status 'done'. This trigger commits exactly that many (never a
+-- number typed in the app). 'error'/'done'-with-zero records nothing.
 create or replace function public.ct_apply_print_job()
 returns trigger
 language plpgsql
@@ -213,18 +218,21 @@ set search_path = public
 as $$
 declare
   rec public.ct_ti_records;
+  seed text;
+  actual integer;
   new_issued integer;
 begin
   if new.action <> 'print' or new.ti_no is null then return new; end if;
   if coalesce(old.committed, false) or coalesce(new.committed, false) then return new; end if;
 
-  if new.status in ('done', 'opened') then
+  if new.status = 'done' and coalesce(new.label_count, 0) > 0 then
     select * into rec from public.ct_ti_records where ti_no = new.ti_no for update;
     if rec.id is not null then
-      new_issued := rec.labels_issued + coalesce(new.label_count, 0);
+      actual := new.label_count;
+      new_issued := rec.labels_issued + actual;
+      seed := public.ct_label_serial_seed(rec.ti_no, rec.serial_number);
       update public.ct_ti_records
-      set labels_reserved = greatest(rec.labels_reserved - coalesce(new.label_count, 0), 0),
-          labels_issued = new_issued,
+      set labels_issued = new_issued,
           labels_locked = (rec.label_qty is not null and new_issued >= rec.label_qty),
           labels_locked_by = case when (rec.label_qty is not null and new_issued >= rec.label_qty) then new.created_by else rec.labels_locked_by end,
           labels_locked_at = case when (rec.label_qty is not null and new_issued >= rec.label_qty) then now() else rec.labels_locked_at end
@@ -233,15 +241,15 @@ begin
       insert into public.ct_ti_label_batches
         (ti_no, count, offset_start, offset_end, serial_start, serial_end, issued_by, issued_by_initials)
       values
-        (new.ti_no, coalesce(new.label_count, 0), rec.labels_issued, new_issued - 1,
-         new.serial_start, new.serial_end, new.created_by, new.created_by_initials);
+        (new.ti_no, actual, rec.labels_issued, new_issued - 1,
+         public.ct_label_serial_at(seed, rec.labels_issued),
+         public.ct_label_serial_at(seed, new_issued - 1),
+         new.created_by, new.created_by_initials);
     end if;
     new.committed := true;
 
-  elsif new.status = 'error' then
-    update public.ct_ti_records
-    set labels_reserved = greatest(labels_reserved - coalesce(new.label_count, 0), 0)
-    where ti_no = new.ti_no;
+  elsif new.status in ('done', 'error') then
+    -- session ended with nothing printed; record nothing
     new.committed := true;
   end if;
 
@@ -313,7 +321,7 @@ on public.ct_print_jobs for select to authenticated
 using (created_by = auth.uid() or public.is_print_agent() or public.is_admin());
 
 -- 'save' jobs are inserted directly by the user; 'print' jobs are inserted by
--- reserve_ti_labels (security definer). Both require the user role.
+-- begin_print (security definer). Both require the user role.
 create policy "Allow users insert print jobs"
 on public.ct_print_jobs for insert to authenticated with check (public.current_user_role() = 'user');
 
@@ -345,5 +353,5 @@ grant execute on function public.is_print_agent() to authenticated;
 grant execute on function public.saved_label_exists(text) to authenticated;
 grant execute on function public.ct_label_serial_at(text, integer) to authenticated;
 grant execute on function public.ct_label_serial_seed(text, text) to authenticated;
-grant execute on function public.reserve_ti_labels(text, text, integer) to authenticated;
+grant execute on function public.begin_print(text, text) to authenticated;
 grant execute on function public.unlock_ti_labels(text, integer) to authenticated;

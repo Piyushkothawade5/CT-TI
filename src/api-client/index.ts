@@ -163,18 +163,15 @@ export interface TiLabelStatus {
   labels_locked: boolean;
 }
 
-export interface ReserveLabelsResult {
+export interface BeginPrintResult {
   job_id: string;
   serial_start: string;
-  serial_end: string;
-  count: number;
   labels_issued: number;
-  labels_reserved: number;
   label_qty: number;
   remaining: number;
 }
 
-export type PrintJobAction = "save" | "print";
+export type PrintJobAction = "save" | "print" | "edit";
 
 export interface PrintJobInput {
   action: PrintJobAction;
@@ -1343,15 +1340,10 @@ async function fetchSavedLabelExists(itemCode: string): Promise<boolean> {
   return rpc<boolean>("saved_label_exists", { p_item_code: itemCode });
 }
 
-async function reserveTiLabelsRequest(
-  tiNo: string,
-  itemCode: string,
-  count: number
-): Promise<ReserveLabelsResult> {
-  return rpc<ReserveLabelsResult>("reserve_ti_labels", {
+async function beginPrintRequest(tiNo: string, itemCode: string): Promise<BeginPrintResult> {
+  return rpc<BeginPrintResult>("begin_print", {
     p_ti_no: tiNo,
     p_item_code: itemCode,
-    p_count: count,
   });
 }
 
@@ -1996,6 +1988,9 @@ export function useTiLabelStatus(
     enabled: options?.query?.enabled !== false && !!tiNo && isSupabaseConfigured,
     retry: false,
     staleTime: 0,
+    // Auto-refresh so the actual printed count (committed by the agent a few
+    // seconds after the operator prints) appears without a manual reload.
+    refetchInterval: 4000,
   });
 }
 
@@ -2014,14 +2009,14 @@ export function useSavedLabelExists(
   });
 }
 
-export function useReserveTiLabels() {
+export function useBeginPrint() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ tiNo, itemCode, count }: { tiNo: string; itemCode: string; count: number }) => {
+    mutationFn: ({ tiNo, itemCode }: { tiNo: string; itemCode: string }) => {
       if (!isSupabaseConfigured) {
         throw new Error("Label printing requires the online (Supabase) database.");
       }
-      return reserveTiLabelsRequest(tiNo, itemCode, count);
+      return beginPrintRequest(tiNo, itemCode);
     },
     onSuccess: (_result, { tiNo }) => {
       queryClient.invalidateQueries({ queryKey: ["ti-label-status", tiNo] });
