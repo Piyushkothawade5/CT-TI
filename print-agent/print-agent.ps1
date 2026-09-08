@@ -201,19 +201,28 @@ function Update-NewSpool {
 
 # Total labels: prefer jobs whose DocumentName matched our token; if none matched
 # (the common case with BarTender), sum all new jobs seen since the baseline.
+# Count ONLY our own job(s) - matched by our temp file's GUID in the spool
+# DocumentName. This SATO is shared with other (non-CT-TI) print jobs, so a job that
+# is not ours must never be counted. Subtract the driver's phantom page
+# (printPageOffset) once per our spool job so the count matches labels physically printed.
 function Get-NewSpoolTotal {
   param([hashtable]$Seen)
-  $ours = 0; $oursJobs = 0; $all = 0; $allJobs = 0
+  $ours = 0; $oursJobs = 0
   foreach ($v in $Seen.Values) {
-    $all += $v.pages; $allJobs++
     if ($v.ours) { $ours += $v.pages; $oursJobs++ }
   }
-  # Prefer token-matched jobs; else all new jobs. Subtract the driver's phantom page
-  # (printPageOffset) once per spool job so the count matches labels physically printed.
-  if ($ours -gt 0) { $total = $ours - ($script:PageOffset * $oursJobs) }
-  else { $total = $all - ($script:PageOffset * $allJobs) }
+  if ($oursJobs -eq 0) { return 0 }
+  $total = $ours - ($script:PageOffset * $oursJobs)
   if ($total -lt 0) { $total = 0 }
   return $total
+}
+
+# Raw pages of our own job(s) only (no offset) - used to detect print activity.
+function Get-OurRawPages {
+  param([hashtable]$Seen)
+  $sum = 0
+  foreach ($v in $Seen.Values) { if ($v.ours) { $sum += $v.pages } }
+  return $sum
 }
 
 # Is BarTender still running (the operator may still be in the print dialog)?
@@ -230,18 +239,22 @@ function Get-ManualPrintCount {
   $baseline = Get-SpoolBaseline $Printer
   $seen = @{}
   $started = Get-Date
-  $lastNew = $null
+  $lastGrowth = $null
+  $ourPages = 0
   $maxSeconds = 600        # hard cap on the whole session
-  $quietSeconds = 20       # finalize this long after the last new spool job
-  $noPrintGiveup = 300     # give up if nothing is ever printed
+  $quietSeconds = 20       # finalize this long after OUR job last grew
+  $noPrintGiveup = 300     # give up if OUR job never prints
   while (((Get-Date) - $started).TotalSeconds -lt $maxSeconds) {
     Start-Sleep -Milliseconds 400
-    if (Update-NewSpool $Printer $DocToken $baseline $seen) { $lastNew = Get-Date }
+    Update-NewSpool $Printer $DocToken $baseline $seen | Out-Null
+    $now = Get-OurRawPages $seen
+    if ($now -gt $ourPages) { $ourPages = $now; $lastGrowth = Get-Date }   # OUR job produced more
     $btRunning = Test-BarTenderRunning
-    if ($seen.Count -gt 0 -and $lastNew -and ((Get-Date) - $lastNew).TotalSeconds -gt $quietSeconds) { break }  # printed, then idle
-    if ($seen.Count -gt 0 -and -not $btRunning) { break }                                                       # printed, then closed
-    if ($seen.Count -eq 0 -and -not $btRunning -and ((Get-Date) - $started).TotalSeconds -gt 15) { break }      # closed without printing
-    if ($seen.Count -eq 0 -and ((Get-Date) - $started).TotalSeconds -gt $noPrintGiveup) { break }               # never printed
+    # Termination keys on OUR job only - other jobs on this shared printer are ignored.
+    if ($ourPages -gt 0 -and $lastGrowth -and ((Get-Date) - $lastGrowth).TotalSeconds -gt $quietSeconds) { break }  # ours printed, then idle
+    if ($ourPages -gt 0 -and -not $btRunning) { break }                                                             # ours printed, then closed
+    if ($ourPages -eq 0 -and -not $btRunning -and ((Get-Date) - $started).TotalSeconds -gt 15) { break }            # closed without printing ours
+    if ($ourPages -eq 0 -and ((Get-Date) - $started).TotalSeconds -gt $noPrintGiveup) { break }                     # ours never printed
   }
   Start-Sleep -Milliseconds 500
   Update-NewSpool $Printer $DocToken $baseline $seen | Out-Null
@@ -282,7 +295,7 @@ function Invoke-XmlScriptPrint {
       $errText = [BtWin]::FindError(); if ($errText) { break }
       Update-NewSpool $printer $docToken $baseline $seen | Out-Null
       if ($p.HasExited) { Start-Sleep -Milliseconds 800; Update-NewSpool $printer $docToken $baseline $seen | Out-Null; break }
-      if ((Get-NewSpoolTotal $seen) -gt 0) { break }
+      if ((Get-OurRawPages $seen) -gt 0) { break }
     }
   } finally { Remove-Item $btxml -Force -ErrorAction SilentlyContinue }
   if ($errText) {
