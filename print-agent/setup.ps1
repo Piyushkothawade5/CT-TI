@@ -67,6 +67,16 @@ if ($satos.Count -gt 1) {
 }
 Write-Host ("SATO printer: " + $(if ($printer) { $printer } else { "(none detected - will use the label's own printer)" }))
 
+# ---- 3b. enable the PrintService event log (the agent reads Event 307 = "document
+#          printed" to get the ACTUAL printed count; this is more reliable than the
+#          live spooler queue). Requires admin, which setup.bat already provides. ----
+try {
+  & wevtutil sl "Microsoft-Windows-PrintService/Operational" /e:true 2>&1 | Out-Null
+  Write-Host "Enabled PrintService/Operational event log (used to read printed counts)."
+} catch {
+  Write-Host ("Could not enable PrintService/Operational log: " + $_.Exception.Message) -ForegroundColor Yellow
+}
+
 # ---- 4. write config.json ----
 $cfg = [ordered]@{
   supabaseUrl         = $supabaseUrl
