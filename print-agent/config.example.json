@@ -11,5 +11,6 @@
   "autoPrint": true,
   "printTimeoutSeconds": 60,
   "pollSeconds": 3,
-  "tempMaxAgeMinutes": 30
+  "tempMaxAgeMinutes": 30,
+  "printPageOffset": 0
 }

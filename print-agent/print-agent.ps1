@@ -24,6 +24,14 @@ if (-not (Test-Path $configPath)) {
 $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
 $patchScript = Join-Path $scriptDir "patch-serial.js"
 
+# Some label-printer drivers (confirmed on the SATO SA408 here) report ONE extra
+# page per job to the Windows spooler than physically prints - a leading feed/config
+# page the driver counts but never emits. printPageOffset subtracts that phantom page
+# per spool job so the recorded count matches the labels that actually come out.
+# Default 0; set to 1 in config.json for the SATO SA408 on this shop PC.
+$script:PageOffset = 0
+try { if ($cfg.printPageOffset) { $script:PageOffset = [int]$cfg.printPageOffset } } catch {}
+
 # Win32 helper to detect a BarTender modal error dialog (MFC dialogs aren't
 # exposed to UI Automation, so read them via GetWindowText).
 Add-Type @"
@@ -195,10 +203,17 @@ function Update-NewSpool {
 # (the common case with BarTender), sum all new jobs seen since the baseline.
 function Get-NewSpoolTotal {
   param([hashtable]$Seen)
-  $ours = 0; $all = 0
-  foreach ($v in $Seen.Values) { $all += $v.pages; if ($v.ours) { $ours += $v.pages } }
-  if ($ours -gt 0) { return $ours }
-  return $all
+  $ours = 0; $oursJobs = 0; $all = 0; $allJobs = 0
+  foreach ($v in $Seen.Values) {
+    $all += $v.pages; $allJobs++
+    if ($v.ours) { $ours += $v.pages; $oursJobs++ }
+  }
+  # Prefer token-matched jobs; else all new jobs. Subtract the driver's phantom page
+  # (printPageOffset) once per spool job so the count matches labels physically printed.
+  if ($ours -gt 0) { $total = $ours - ($script:PageOffset * $oursJobs) }
+  else { $total = $all - ($script:PageOffset * $allJobs) }
+  if ($total -lt 0) { $total = 0 }
+  return $total
 }
 
 # Is BarTender still running (the operator may still be in the print dialog)?

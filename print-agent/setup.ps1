@@ -52,9 +52,19 @@ if ($LASTEXITCODE -ne 0) { throw "npm install failed." }
 # ---- 3. detect BarTender + SATO printer ----
 $bartend = (Get-ChildItem -Path @($env:ProgramFiles, ${env:ProgramFiles(x86)}) -Filter "bartend.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
 if (-not $bartend) { $bartend = "C:\Program Files (x86)\Seagull\BarTender UltraLite\BarTend.exe" }
-$printer = (Get-Printer -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "SATO" } | Select-Object -First 1 -ExpandProperty Name)
+# There can be several SATO entries (e.g. 'SATO SA408' and 'SATO SA408 SEPL' on
+# different USB ports). We must watch the SAME printer the label actually prints to.
+# Prefer the plain 'SATO SA408' (SBPL) over the 'SEPL' variant; if unsure, the value
+# is easily corrected in config.json.
+$satos = @(Get-Printer -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "SATO" } | Select-Object -ExpandProperty Name)
+$printer = ($satos | Where-Object { $_ -notmatch "SEPL" } | Select-Object -First 1)
+if (-not $printer) { $printer = ($satos | Select-Object -First 1) }
 if (-not $printer) { $printer = "" }
 Write-Host ("BarTender: " + $bartend)
+if ($satos.Count -gt 1) {
+  Write-Host ("Multiple SATO printers found: " + ($satos -join ", ")) -ForegroundColor Yellow
+  Write-Host ("Using '$printer' - if the operator prints to a different one, edit printerName in config.json.") -ForegroundColor Yellow
+}
 Write-Host ("SATO printer: " + $(if ($printer) { $printer } else { "(none detected - will use the label's own printer)" }))
 
 # ---- 4. write config.json ----
@@ -72,6 +82,7 @@ $cfg = [ordered]@{
   printTimeoutSeconds = 60
   pollSeconds         = 3
   tempMaxAgeMinutes   = 30
+  printPageOffset     = 1
 }
 [IO.File]::WriteAllText((Join-Path $here "config.json"), ($cfg | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
 New-Item -ItemType Directory -Force -Path "C:\CTLabels\.work" | Out-Null

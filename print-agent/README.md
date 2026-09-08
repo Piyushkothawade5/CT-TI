@@ -36,7 +36,15 @@ Automation-edition upgrade, but are dormant unless a job carries a target count.
 
 **Requirements for a correct count:**
 - **`printerName` in config.json is required** and must match the printer the operator actually
-  prints to (the agent reads *that* printer's spooler). setup.bat auto-detects the SATO.
+  prints to (the agent reads *that* printer's spooler). setup.bat auto-detects the SATO. If the PC
+  has more than one SATO entry (e.g. `SATO SA408` and `SATO SA408 SEPL` on different USB ports),
+  make sure `printerName` is the **exact** one selected in the label — otherwise the agent watches
+  the wrong queue and counts 0.
+- **`printPageOffset`** subtracts a fixed number of pages **per print job** from the spooler count.
+  The SATO SA408 driver reports **one extra page per job** than it physically prints (a leading
+  feed/config page), so set `printPageOffset: 1` for it (setup.bat now defaults to 1). If a printer
+  reports the true count, set it to `0`. Verify by printing a known quantity and comparing the
+  labels that come out to the count recorded in the app.
 - **The label must have serialization turned ON** on the `Sr No` field (else BarTender won't let
   the operator print more than 1). Enable it once when first correcting/saving each template.
 
