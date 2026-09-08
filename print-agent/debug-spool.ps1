@@ -57,12 +57,31 @@ if (-not $Printer) {
 }
 Log "Target printer: '$Printer'"
 
+# ---- enable the PrintService Operational log (reliable actual-page source) -------
+$logName = 'Microsoft-Windows-PrintService/Operational'
+$script:EventLogReady = $false
+function Enable-PrintServiceLog {
+  try {
+    $ll = Get-WinEvent -ListLog $logName -ErrorAction Stop
+    if ($ll.IsEnabled) { Log "PrintService/Operational log: already enabled."; $script:EventLogReady = $true; return }
+    Log "PrintService/Operational log is DISABLED - enabling it now..."
+    & wevtutil sl $logName /e:true 2>&1 | Out-Null
+    $ll = Get-WinEvent -ListLog $logName -ErrorAction Stop
+    if ($ll.IsEnabled) { Log "  enabled OK."; $script:EventLogReady = $true }
+    else { Log "  STILL disabled - re-run this script in an ADMIN PowerShell (right-click > Run as administrator)." }
+  } catch {
+    Log "  could not enable the log: $($_.Exception.Message)"
+    Log "  Run this in an ADMIN PowerShell:  wevtutil sl `"$logName`" /e:true"
+  }
+}
+Enable-PrintServiceLog
+
 # ---- recent 'document printed' events (actual pages) ----------------------------
 function Show-RecentPrintEvents {
-  Log "---- recent PrintService 'document printed' (Event 307) events ----"
+  param([switch]$Quiet)
   try {
-    $events = Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-PrintService/Operational'; Id = 307 } -MaxEvents 15 -ErrorAction Stop
-    if (-not $events) { Log "  (none found yet)"; return }
+    $events = @(Get-WinEvent -FilterHashtable @{ LogName = $logName; Id = 307 } -MaxEvents 15 -ErrorAction Stop)
+    if (-not $Quiet -or $events.Count -gt 0) { Log "---- recent 'document printed' (Event 307) ----" }
     foreach ($e in ($events | Sort-Object TimeCreated)) {
       $p = $e.Properties
       $doc = if ($p.Count -gt 1) { [string]$p[1].Value } else { "" }
@@ -71,9 +90,8 @@ function Show-RecentPrintEvents {
       Log ("  {0}  doc='{1}' printer='{2}' pages={3}" -f $e.TimeCreated.ToString("HH:mm:ss"), $doc, $prn, $pages)
     }
   } catch {
-    Log "  Could not read Microsoft-Windows-PrintService/Operational: $($_.Exception.Message)"
-    Log "  If it says the log is disabled, enable it once: Event Viewer > Applications and Services Logs >"
-    Log "  Microsoft > Windows > PrintService > Operational > (right-click) Enable Log. Then re-run and print."
+    # "No events were found" just means the log is enabled but empty so far - not an error.
+    if (-not $Quiet) { Log "---- 'document printed' events: none yet ----" }
   }
 }
 Show-RecentPrintEvents
@@ -84,7 +102,8 @@ Log "Now do ONE print from BarTender. Watching the queue (Ctrl+C to stop)..."
 Log "----------------------------------------------------------------"
 
 $state = @{}
-$lastEventDump = Get-Date
+$eventCount = 0
+$lastHeartbeat = Get-Date
 while ($true) {
   try {
     foreach ($j in @(Get-PrintJob -PrinterName $Printer -ErrorAction Stop)) {
@@ -97,8 +116,15 @@ while ($true) {
     Log "Get-PrintJob error: $($_.Exception.Message)"
     Start-Sleep -Seconds 2
   }
-  # Every ~10s, also re-dump completed-print events so we still capture jobs that
-  # cleared the queue between polls (too fast to catch live).
-  if (((Get-Date) - $lastEventDump).TotalSeconds -gt 10) { Show-RecentPrintEvents; $lastEventDump = Get-Date }
+  # Surface any brand-new 'document printed' events (catches jobs that cleared the
+  # queue too fast to see live). Only logs when the count actually grows.
+  if ($script:EventLogReady) {
+    try {
+      $n = @(Get-WinEvent -FilterHashtable @{ LogName = $logName; Id = 307 } -MaxEvents 30 -ErrorAction Stop).Count
+      if ($n -gt $eventCount) { $eventCount = $n; Show-RecentPrintEvents -Quiet }
+    } catch {}
+  }
+  # Quiet heartbeat every 30s so you know it's alive while you set up the print.
+  if (((Get-Date) - $lastHeartbeat).TotalSeconds -gt 30) { Log "...watching '$Printer' (Ctrl+C to stop)"; $lastHeartbeat = Get-Date }
   Start-Sleep -Milliseconds 200
 }
