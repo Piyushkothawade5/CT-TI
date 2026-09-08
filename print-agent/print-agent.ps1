@@ -236,29 +236,39 @@ function Test-BarTenderRunning {
 # period, BarTender closed without printing, or a hard time cap.
 function Get-ManualPrintCount {
   param([string]$Printer, [string]$DocToken)
-  $baseline = Get-SpoolBaseline $Printer
-  $seen = @{}
+  # Our temp file's GUID ($DocToken) is UNIQUE to this one print job, so any spool job
+  # whose DocumentName carries it is ours - no baseline diff needed. This is robust to:
+  #   * the SATO retaining jobs in the queue (they persist, so we find ours even late),
+  #   * the operator taking minutes / closing & reopening BarTender before printing,
+  #   * other (non-CT-TI) jobs on this shared printer (they never carry our GUID).
+  $seen = @{}              # spool jobId -> pages, OUR jobs only
   $started = Get-Date
   $lastGrowth = $null
   $ourPages = 0
-  $maxSeconds = 600        # hard cap on the whole session
-  $quietSeconds = 20       # finalize this long after OUR job last grew
-  $noPrintGiveup = 300     # give up if OUR job never prints
+  $maxSeconds = 900        # hard cap on the whole session
+  $quietSeconds = 15       # finalize this long after OUR job's pages stop growing
+  $noPrintGiveup = 360     # give up if OUR job never appears (operator didn't print)
   while (((Get-Date) - $started).TotalSeconds -lt $maxSeconds) {
-    Start-Sleep -Milliseconds 400
-    Update-NewSpool $Printer $DocToken $baseline $seen | Out-Null
-    $now = Get-OurRawPages $seen
-    if ($now -gt $ourPages) { $ourPages = $now; $lastGrowth = Get-Date }   # OUR job produced more
-    $btRunning = Test-BarTenderRunning
-    # Termination keys on OUR job only - other jobs on this shared printer are ignored.
-    if ($ourPages -gt 0 -and $lastGrowth -and ((Get-Date) - $lastGrowth).TotalSeconds -gt $quietSeconds) { break }  # ours printed, then idle
-    if ($ourPages -gt 0 -and -not $btRunning) { break }                                                             # ours printed, then closed
-    if ($ourPages -eq 0 -and -not $btRunning -and ((Get-Date) - $started).TotalSeconds -gt 15) { break }            # closed without printing ours
+    Start-Sleep -Milliseconds 500
+    try {
+      foreach ($j in @(Get-PrintJob -PrinterName $Printer -ErrorAction SilentlyContinue)) {
+        $doc = [string]$j.DocumentName
+        if (-not ($doc -and $doc.Contains($DocToken))) { continue }   # not ours -> ignore
+        $id = [string]$j.Id
+        $pages = [int]$j.TotalPages; if ($pages -lt 1) { $pages = 1 }
+        if (-not $seen.ContainsKey($id)) { $seen[$id] = $pages; Write-Host "[print]   our spool job id=$id doc='$doc' pages=$pages" }
+        elseif ($pages -gt $seen[$id]) { $seen[$id] = $pages }
+      }
+    } catch {}
+    $now = 0; foreach ($v in $seen.Values) { $now += $v }
+    if ($now -gt $ourPages) { $ourPages = $now; $lastGrowth = Get-Date }
+    if ($ourPages -gt 0 -and $lastGrowth -and ((Get-Date) - $lastGrowth).TotalSeconds -gt $quietSeconds) { break }  # ours printed, then stable
     if ($ourPages -eq 0 -and ((Get-Date) - $started).TotalSeconds -gt $noPrintGiveup) { break }                     # ours never printed
   }
-  Start-Sleep -Milliseconds 500
-  Update-NewSpool $Printer $DocToken $baseline $seen | Out-Null
-  return (Get-NewSpoolTotal $seen)
+  # Subtract the driver's phantom page once per OUR spool job.
+  $total = $ourPages - ($script:PageOffset * $seen.Count)
+  if ($total -lt 0) { $total = 0 }
+  return $total
 }
 
 # Automation-edition path (headless): XML Script prints $Count labels; returns the
