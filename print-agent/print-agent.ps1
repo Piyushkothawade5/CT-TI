@@ -155,57 +155,82 @@ function Set-JobResult {
   Invoke-Rest -Method Patch -Path "ct_print_jobs?id=eq.$Id" -Body ($payload | ConvertTo-Json) -Prefer "return=minimal" | Out-Null
 }
 
-# Sum pages of spooler jobs that are OURS only. We name the working file with the
-# print job's unique GUID, so BarTender's spool DocumentName carries that GUID —
-# jobs from other apps/operators on the same printer are ignored. $Seen maps
-# jobId -> pages; returns $true if a new OUR job appeared this call.
-function Update-OurSpool {
-  param([string]$Printer, [string]$DocToken, [hashtable]$Seen)
+# Snapshot the ids of jobs already sitting in the printer queue, so we only ever
+# count jobs that appear AFTER we start watching (this operator's print).
+function Get-SpoolBaseline {
+  param([string]$Printer)
+  $ids = @{}
+  try { foreach ($j in Get-PrintJob -PrinterName $Printer -ErrorAction SilentlyContinue) { $ids[[string]$j.Id] = $true } } catch {}
+  return $ids
+}
+
+# Scan the queue and record every job that appeared after the baseline. $Seen maps
+# jobId -> @{ pages; doc; ours }. 'ours' is true when the spool DocumentName carries
+# our GUID token (best case) - but BarTender usually names the spool after the label's
+# OWN document name, which does not contain our token, so we also keep every new job
+# and fall back to that. Returns $true when a new job appeared this scan.
+function Update-NewSpool {
+  param([string]$Printer, [string]$DocToken, [hashtable]$Baseline, [hashtable]$Seen)
   $found = $false
   try {
     foreach ($j in Get-PrintJob -PrinterName $Printer -ErrorAction SilentlyContinue) {
-      $doc = [string]$j.DocumentName
-      if (-not ($doc -and $doc.Contains($DocToken))) { continue }   # not our job -> ignore
       $id = [string]$j.Id
+      if ($Baseline.ContainsKey($id)) { continue }                 # pre-existing -> ignore
+      $doc = [string]$j.DocumentName
       $pages = [int]$j.TotalPages; if ($pages -lt 1) { $pages = 1 }
-      if (-not $Seen.ContainsKey($id)) { $Seen[$id] = $pages; $found = $true; Write-Host "[print]   our spool job '$doc' pages=$pages" }
-      elseif ($pages -gt $Seen[$id]) { $Seen[$id] = $pages }
+      $ours = [bool]($doc -and $DocToken -and $doc.Contains($DocToken))
+      if (-not $Seen.ContainsKey($id)) {
+        $Seen[$id] = @{ pages = $pages; doc = $doc; ours = $ours }
+        $found = $true
+        Write-Host "[print]   new spool job id=$id doc='$doc' pages=$pages ours=$ours"
+      } elseif ($pages -gt $Seen[$id].pages) {
+        $Seen[$id].pages = $pages
+      }
     }
   } catch {}
   return $found
 }
 
-function Get-SeenTotal { param([hashtable]$Seen) $s = 0; foreach ($v in $Seen.Values) { $s += $v }; return $s }
-
-function Get-BarTenderDocOpen {
-  param([string]$DocToken)
-  try {
-    $t = (Get-Process bartend -ErrorAction SilentlyContinue | Select-Object -First 1).MainWindowTitle
-    return [bool]($t -and $t.Contains($DocToken))
-  } catch { return $false }
+# Total labels: prefer jobs whose DocumentName matched our token; if none matched
+# (the common case with BarTender), sum all new jobs seen since the baseline.
+function Get-NewSpoolTotal {
+  param([hashtable]$Seen)
+  $ours = 0; $all = 0
+  foreach ($v in $Seen.Values) { $all += $v.pages; if ($v.ours) { $ours += $v.pages } }
+  if ($ours -gt 0) { return $ours }
+  return $all
 }
 
-# Manual mode: the operator prints in BarTender; we watch the spooler for OUR job(s)
-# during the session and return the ACTUAL number of labels produced. Ends when the
-# doc is closed, or after a quiet period following a print, or a hard cap.
+# Is BarTender still running (the operator may still be in the print dialog)?
+function Test-BarTenderRunning {
+  try { return [bool](Get-Process bartend -ErrorAction SilentlyContinue) } catch { return $false }
+}
+
+# Manual mode: the operator prints in BarTender; we watch the spooler and return the
+# ACTUAL number of labels produced, counting only jobs that appear after we start
+# watching. Ends when: printed then BarTender closed, printed then idle for a quiet
+# period, BarTender closed without printing, or a hard time cap.
 function Get-ManualPrintCount {
   param([string]$Printer, [string]$DocToken)
+  $baseline = Get-SpoolBaseline $Printer
   $seen = @{}
   $started = Get-Date
   $lastNew = $null
-  $maxSeconds = 600
-  $quietSeconds = 25
+  $maxSeconds = 600        # hard cap on the whole session
+  $quietSeconds = 20       # finalize this long after the last new spool job
+  $noPrintGiveup = 300     # give up if nothing is ever printed
   while (((Get-Date) - $started).TotalSeconds -lt $maxSeconds) {
-    Start-Sleep -Milliseconds 700
-    if (Update-OurSpool $Printer $DocToken $seen) { $lastNew = Get-Date }
-    $docOpen = Get-BarTenderDocOpen $DocToken
-    if (-not $docOpen -and $seen.Count -gt 0) { break }                                                   # printed, then closed
-    if ($lastNew -and ((Get-Date) - $lastNew).TotalSeconds -gt $quietSeconds) { break }                    # printed, then idle
-    if (-not $docOpen -and $seen.Count -eq 0 -and ((Get-Date) - $started).TotalSeconds -gt 20) { break }   # closed without printing
+    Start-Sleep -Milliseconds 400
+    if (Update-NewSpool $Printer $DocToken $baseline $seen) { $lastNew = Get-Date }
+    $btRunning = Test-BarTenderRunning
+    if ($seen.Count -gt 0 -and $lastNew -and ((Get-Date) - $lastNew).TotalSeconds -gt $quietSeconds) { break }  # printed, then idle
+    if ($seen.Count -gt 0 -and -not $btRunning) { break }                                                       # printed, then closed
+    if ($seen.Count -eq 0 -and -not $btRunning -and ((Get-Date) - $started).TotalSeconds -gt 15) { break }      # closed without printing
+    if ($seen.Count -eq 0 -and ((Get-Date) - $started).TotalSeconds -gt $noPrintGiveup) { break }               # never printed
   }
-  Start-Sleep -Milliseconds 600
-  Update-OurSpool $Printer $DocToken $seen | Out-Null
-  return (Get-SeenTotal $seen)
+  Start-Sleep -Milliseconds 500
+  Update-NewSpool $Printer $DocToken $baseline $seen | Out-Null
+  return (Get-NewSpoolTotal $seen)
 }
 
 # Automation-edition path (headless): XML Script prints $Count labels; returns the
@@ -231,6 +256,7 @@ function Invoke-XmlScriptPrint {
 </XMLScript>
 "@
   [IO.File]::WriteAllText($btxml, $doc, (New-Object System.Text.UTF8Encoding($false)))
+  $baseline = Get-SpoolBaseline $printer
   $seen = @{}
   $p = Start-Process -FilePath $cfg.bartendExe -ArgumentList "/XMLScript=`"$btxml`"" -PassThru
   $deadline = (Get-Date).AddSeconds([int]$cfg.printTimeoutSeconds)
@@ -239,9 +265,9 @@ function Invoke-XmlScriptPrint {
     while ((Get-Date) -lt $deadline) {
       Start-Sleep -Milliseconds 500
       $errText = [BtWin]::FindError(); if ($errText) { break }
-      Update-OurSpool $printer $docToken $seen | Out-Null
-      if ($p.HasExited) { Start-Sleep -Milliseconds 800; Update-OurSpool $printer $docToken $seen | Out-Null; break }
-      if ((Get-SeenTotal $seen) -gt 0) { break }
+      Update-NewSpool $printer $docToken $baseline $seen | Out-Null
+      if ($p.HasExited) { Start-Sleep -Milliseconds 800; Update-NewSpool $printer $docToken $baseline $seen | Out-Null; break }
+      if ((Get-NewSpoolTotal $seen) -gt 0) { break }
     }
   } finally { Remove-Item $btxml -Force -ErrorAction SilentlyContinue }
   if ($errText) {
@@ -249,7 +275,7 @@ function Invoke-XmlScriptPrint {
     Get-Process bartend -ErrorAction SilentlyContinue | Stop-Process -Force
     throw "BarTender did not print (nothing counted): $errText"
   }
-  return (Get-SeenTotal $seen)
+  return (Get-NewSpoolTotal $seen)
 }
 
 function Invoke-PrintJob {
