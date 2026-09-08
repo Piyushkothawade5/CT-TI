@@ -234,50 +234,53 @@ function Test-BarTenderRunning {
 # ACTUAL number of labels produced, counting only jobs that appear after we start
 # watching. Ends when: printed then BarTender closed, printed then idle for a quiet
 # period, BarTender closed without printing, or a hard time cap.
-$script:PrintLogName = 'Microsoft-Windows-PrintService/Operational'
+# Enable "Keep printed documents" (retention) on the printer so OUR spool job stays in
+# the queue long enough to be seen even when a label prints in a fraction of a second.
+# Best-effort (needs admin; setup.bat also does this). Returns nothing.
+function Enable-PrinterRetention {
+  param([string]$Printer)
+  try { Set-Printer -Name $Printer -KeepPrintedJobs $true -ErrorAction Stop } catch {}
+}
 
-# Manual mode: read the ACTUAL printed count from the Windows PrintService event log
-# (Event 307 = "document printed"). This is far more reliable than polling the live
-# spooler queue, which misses jobs that print and clear quickly - proven on this SATO,
-# where a real print was recorded by Event 307 but never seen in the live queue.
-#
-# We count only Event-307 records for OUR printer that occur after we start watching
-# (this print session). Each record's page count includes the driver's phantom leading
-# page, so printPageOffset is subtracted once per record. HP/other-printer records are
-# ignored by the printer-name filter. On a dedicated single-operator print PC the only
-# SATO print during the watch window is this operator's, so it is our job.
+# Manual mode: read the ACTUAL printed count from the Windows spooler for OUR job ONLY.
+# Our job is identified by our temp file's unique GUID and by the item-code template
+# name in the spool DocumentName, so concurrent OTHER prints on this shared SATO - which
+# carry different names - are never counted. Retention (above) keeps our job visible long
+# enough to catch; after counting we delete our own job so the shared queue stays clean.
+# TotalPages includes the driver's phantom leading page, so printPageOffset is subtracted
+# once per our spool job.
 function Get-ManualPrintCount {
-  param([string]$Printer, [string]$DocToken)
-  $startTime = Get-Date
-  $counted = @{}           # event RecordId -> pages (dedupe across polls)
+  param([string]$Printer, [string]$DocToken, [string]$ItemToken)
+  $seen = @{}              # spool jobId -> pages, OURS only
+  $started = Get-Date
   $lastGrowth = $null
+  $ourPages = 0
   $maxSeconds = 900        # hard cap on the whole session
-  $quietSeconds = 15       # finalize this long after the last print record
-  $noPrintGiveup = 360     # give up if nothing prints on our printer
-  while (((Get-Date) - $startTime).TotalSeconds -lt $maxSeconds) {
-    Start-Sleep -Milliseconds 700
+  $quietSeconds = 12       # finalize this long after OUR job's pages stop growing
+  $noPrintGiveup = 360     # give up if OUR job never appears (operator didn't print)
+  while (((Get-Date) - $started).TotalSeconds -lt $maxSeconds) {
+    Start-Sleep -Milliseconds 400
     try {
-      $events = @(Get-WinEvent -FilterHashtable @{ LogName = $script:PrintLogName; Id = 307; StartTime = $startTime } -ErrorAction SilentlyContinue)
-      foreach ($e in $events) {
-        $rid = [string]$e.RecordId
-        if ($counted.ContainsKey($rid)) { continue }
-        $p = $e.Properties
-        $prn = if ($p.Count -gt 4) { [string]$p[4].Value } else { "" }
-        if ($prn -ne $Printer) { continue }                 # only OUR printer
-        $pages = 0; if ($p.Count -gt 7) { [int]::TryParse([string]$p[7].Value, [ref]$pages) | Out-Null }
-        if ($pages -lt 1) { $pages = 1 }
-        $counted[$rid] = $pages
-        $doc = if ($p.Count -gt 1) { [string]$p[1].Value } else { "" }
-        Write-Host "[print]   printed doc='$doc' printer='$prn' pages=$pages"
-        $lastGrowth = Get-Date
+      foreach ($j in @(Get-PrintJob -PrinterName $Printer -ErrorAction SilentlyContinue)) {
+        $doc = [string]$j.DocumentName
+        $mine = $doc -and ((($DocToken) -and $doc.Contains($DocToken)) -or (($ItemToken) -and $doc.Contains($ItemToken)))
+        if (-not $mine) { continue }                          # not ours -> ignore
+        $id = [string]$j.Id
+        $pages = [int]$j.TotalPages; if ($pages -lt 1) { $pages = 1 }
+        if (-not $seen.ContainsKey($id)) { $seen[$id] = $pages; Write-Host "[print]   our spool job id=$id doc='$doc' pages=$pages" }
+        elseif ($pages -gt $seen[$id]) { $seen[$id] = $pages }
       }
     } catch {}
-    $sum = 0; foreach ($v in $counted.Values) { $sum += $v }
-    if ($sum -gt 0 -and $lastGrowth -and ((Get-Date) - $lastGrowth).TotalSeconds -gt $quietSeconds) { break }  # printed, then stable
-    if ($sum -eq 0 -and ((Get-Date) - $startTime).TotalSeconds -gt $noPrintGiveup) { break }                   # nothing printed
+    $now = 0; foreach ($v in $seen.Values) { $now += $v }
+    if ($now -gt $ourPages) { $ourPages = $now; $lastGrowth = Get-Date }
+    if ($ourPages -gt 0 -and $lastGrowth -and ((Get-Date) - $lastGrowth).TotalSeconds -gt $quietSeconds) { break }  # ours printed, then stable
+    if ($ourPages -eq 0 -and ((Get-Date) - $started).TotalSeconds -gt $noPrintGiveup) { break }                     # ours never printed
   }
-  $sum = 0; foreach ($v in $counted.Values) { $sum += $v }
-  $total = $sum - ($script:PageOffset * $counted.Count)      # phantom page per print record
+  # Delete our own retained spool job(s) so the shared queue does not fill up.
+  foreach ($id in @($seen.Keys)) {
+    try { Remove-PrintJob -PrinterName $Printer -ID ([int]$id) -ErrorAction SilentlyContinue } catch {}
+  }
+  $total = $ourPages - ($script:PageOffset * $seen.Count)     # phantom page per our spool job
   if ($total -lt 0) { $total = 0 }
   return $total
 }
@@ -362,7 +365,7 @@ function Invoke-PrintJob {
     Open-InBarTender $work
     Set-JobStatus -Id $Job.id -Status "opened"
     Write-Host "[print] $($Job.item_code) opened in BarTender (start=$start) - watching '$($cfg.printerName)' for actual count..."
-    $actual = Get-ManualPrintCount $cfg.printerName ([IO.Path]::GetFileNameWithoutExtension($work))
+    $actual = Get-ManualPrintCount $cfg.printerName ([IO.Path]::GetFileNameWithoutExtension($work)) $safe
     Remove-Item $work -Force -ErrorAction SilentlyContinue
   }
 
@@ -398,16 +401,8 @@ function Clear-StaleOpenJobs {
 }
 
 Write-Host "CT-TI print agent starting. Library: $($cfg.libraryDir)  Poll: $($cfg.pollSeconds)s"
-# The printed count comes from the PrintService event log (Event 307). Make sure it is
-# enabled and readable; warn loudly if not, because otherwise prints won't be counted.
-try {
-  & wevtutil sl "$($script:PrintLogName)" /e:true 2>&1 | Out-Null   # best-effort (needs admin)
-  $ll = Get-WinEvent -ListLog $script:PrintLogName -ErrorAction Stop
-  if ($ll.IsEnabled) { Write-Host "[startup] PrintService/Operational log enabled - printed counts will be read from it." }
-  else { Write-Warning "[startup] PrintService/Operational log is DISABLED. Re-run setup.bat as admin, or counts will read 0." }
-} catch {
-  Write-Warning "[startup] cannot read PrintService/Operational log ($($_.Exception.Message)). Re-run setup.bat as admin."
-}
+# Keep printed documents on the SATO so our spool job is visible long enough to count.
+if ($cfg.printerName) { Enable-PrinterRetention $cfg.printerName }
 # Initial sign-in, but a transient network/auth blip must NOT kill the agent -
 # Invoke-Rest re-authenticates lazily inside the loop, so just log and keep going.
 try { Get-AuthToken; Clear-StaleOpenJobs } catch { Write-Warning "initial sign-in failed: $($_.Exception.Message) - will retry while polling." }

@@ -67,14 +67,17 @@ if ($satos.Count -gt 1) {
 }
 Write-Host ("SATO printer: " + $(if ($printer) { $printer } else { "(none detected - will use the label's own printer)" }))
 
-# ---- 3b. enable the PrintService event log (the agent reads Event 307 = "document
-#          printed" to get the ACTUAL printed count; this is more reliable than the
-#          live spooler queue). Requires admin, which setup.bat already provides. ----
-try {
-  & wevtutil sl "Microsoft-Windows-PrintService/Operational" /e:true 2>&1 | Out-Null
-  Write-Host "Enabled PrintService/Operational event log (used to read printed counts)."
-} catch {
-  Write-Host ("Could not enable PrintService/Operational log: " + $_.Exception.Message) -ForegroundColor Yellow
+# ---- 3b. keep printed documents (retention) on the SATO. The agent identifies OUR
+#          print by our temp file's GUID in the spool queue; retention keeps that job
+#          visible long enough to catch even when a label prints in a fraction of a
+#          second. The agent deletes its own job after counting. ----
+if ($printer) {
+  try {
+    Set-Printer -Name $printer -KeepPrintedJobs $true -ErrorAction Stop
+    Write-Host "Enabled 'keep printed documents' on '$printer' (needed to read printed counts)."
+  } catch {
+    Write-Host ("Could not enable retention on '$printer': " + $_.Exception.Message) -ForegroundColor Yellow
+  }
 }
 
 # ---- 4. write config.json ----
