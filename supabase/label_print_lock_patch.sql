@@ -222,6 +222,13 @@ declare
   actual integer;
   new_issued integer;
 begin
+  -- Reclaim storage: the base64 template is only needed until the agent has written
+  -- the label file to the print PC. Drop it once the job reaches a successful terminal
+  -- state (any action) so save/edit blobs (~50 KB each) don't accumulate in the DB.
+  if new.btw_base64 is not null and new.status in ('saved', 'done') then
+    new.btw_base64 := null;
+  end if;
+
   if new.action <> 'print' or new.ti_no is null then return new; end if;
   if coalesce(old.committed, false) or coalesce(new.committed, false) then return new; end if;
 
@@ -261,6 +268,10 @@ drop trigger if exists ct_print_jobs_apply on public.ct_print_jobs;
 create trigger ct_print_jobs_apply
 before update on public.ct_print_jobs
 for each row execute function public.ct_apply_print_job();
+
+-- One-time reclaim: null out template blobs already consumed by the agent.
+update public.ct_print_jobs set btw_base64 = null
+where btw_base64 is not null and status in ('saved', 'done');
 
 -- ---------------------------------------------------------------------------
 -- 7. unlock_ti_labels — admin clears the lock (and any stuck reservations)

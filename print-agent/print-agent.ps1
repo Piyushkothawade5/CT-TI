@@ -116,33 +116,34 @@ function Open-InBarTender {
   catch { Start-Process -FilePath $cfg.bartendExe -ArgumentList "/F=`"$FilePath`"" | Out-Null }
 }
 
-function Invoke-SaveJob {
+# Save and Edit share one safe behavior: the local library file is the source of
+# truth for THIS PC. If it already exists -> just open it (never overwrite the
+# operator's corrections). If it's missing (e.g. this is a different PC that never
+# saved it) -> create it from the template the app sent, then open it.
+function Invoke-OpenLabelJob {
   param($Job)
   $safe = Get-SafeItemCode $Job.item_code
   $dir = Join-Path $cfg.libraryDir $safe
   New-Item -ItemType Directory -Force -Path $dir | Out-Null
   $target = Join-Path $dir "$safe.btw"
-  if (-not $Job.btw_base64) { throw "save job has no btw_base64 payload" }
+
+  if (Test-Path $target) {
+    Open-InBarTender $target
+    Set-JobStatus -Id $Job.id -Status "saved"
+    Write-Host "[$($Job.action)] $($Job.item_code) -> opened existing $target (not overwritten)"
+    return
+  }
+
+  if (-not $Job.btw_base64) {
+    Set-JobStatus -Id $Job.id -Status "error" -ErrorText "No saved label on this PC and no template supplied. Click Save Label to create it here first."
+    Write-Host "[$($Job.action)] $($Job.item_code) -> missing file and no template data"
+    return
+  }
+
   [IO.File]::WriteAllBytes($target, [Convert]::FromBase64String($Job.btw_base64))
   Open-InBarTender $target
   Set-JobStatus -Id $Job.id -Status "saved"
-  Write-Host "[save] $($Job.item_code) -> $target (opened in BarTender)"
-}
-
-# 'edit' opens the EXISTING saved label for the item code (no regeneration), so the
-# operator can adjust it and Ctrl+S back to the same file.
-function Invoke-EditJob {
-  param($Job)
-  $safe = Get-SafeItemCode $Job.item_code
-  $target = Join-Path (Join-Path $cfg.libraryDir $safe) "$safe.btw"
-  if (-not (Test-Path $target)) {
-    Set-JobStatus -Id $Job.id -Status "error" -ErrorText "No saved label to edit for item code $($Job.item_code)."
-    Write-Host "[edit] no saved label for $($Job.item_code)"
-    return
-  }
-  Open-InBarTender $target
-  Set-JobStatus -Id $Job.id -Status "saved"
-  Write-Host "[edit] $($Job.item_code) -> $target (opened for editing)"
+  Write-Host "[$($Job.action)] $($Job.item_code) -> created + opened $target"
 }
 
 # ---- print helpers: read the ACTUAL printed count from the Windows spooler ----
@@ -331,8 +332,7 @@ while ($true) {
     $jobs = Invoke-Rest -Method Get -Path "ct_print_jobs?status=eq.pending&order=created_at.asc&limit=5"
     foreach ($job in $jobs) {
       try {
-        if ($job.action -eq "save") { Invoke-SaveJob $job }
-        elseif ($job.action -eq "edit") { Invoke-EditJob $job }
+        if ($job.action -eq "save" -or $job.action -eq "edit") { Invoke-OpenLabelJob $job }
         elseif ($job.action -eq "print") { Invoke-PrintJob $job }
         else { Set-JobStatus -Id $job.id -Status "error" -ErrorText "Unknown action $($job.action)" }
       } catch {

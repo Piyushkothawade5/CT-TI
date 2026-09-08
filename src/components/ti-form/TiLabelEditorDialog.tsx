@@ -137,12 +137,23 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
     if (!itemCode) return;
     setBusy("edit");
     try {
-      // Open the EXISTING saved label for this item code in BarTender (no regeneration),
-      // so the operator can adjust it and Ctrl+S back to the same file.
-      await enqueueJob.mutateAsync({ action: "edit", ti_no: tiNo, item_code: itemCode });
+      // Open the saved label for this item code. On the PC that has it, the agent opens
+      // the existing (corrected) file and never overwrites it. If THIS print PC doesn't
+      // have it yet (a different machine), the agent creates it from the template below
+      // and opens that — so Edit never fails with "label not found" on a fresh PC.
+      let btw_base64: string | undefined;
+      if (row) {
+        const download = await buildBarTenderBtwDownload({
+          tiNo: tiNo || "TI",
+          itemNo: row.ITEM_NO || itemCode,
+          row,
+        });
+        btw_base64 = await blobToBase64(download.blob);
+      }
+      await enqueueJob.mutateAsync({ action: "edit", ti_no: tiNo, item_code: itemCode, btw_base64 });
       toast({
         title: "Opening saved label to edit",
-        description: "The print PC will open the saved label in BarTender — adjust it, then press Ctrl+S.",
+        description: "The print PC opens its saved label (or creates it here if this PC doesn't have it) — adjust it, then press Ctrl+S.",
       });
       onOpenChange(false);
     } catch (error) {
