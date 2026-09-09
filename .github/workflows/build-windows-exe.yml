@@ -1,0 +1,35 @@
+name: Build Windows EXE
+
+# Builds the desktop app into a Windows installer (.exe) and a portable .exe.
+# Run it manually from the Actions tab, or on a version tag push.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Windows installer + portable exe
+        run: npm run dist:win
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ct-ti-windows-exe
+          path: |
+            release/*.exe
+          if-no-files-found: error

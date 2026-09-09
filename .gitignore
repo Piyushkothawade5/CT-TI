@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+# Electron packaging output
+release/
+
 # Local tooling / editor
 .claude/
 .vscode/

@@ -53,6 +53,21 @@ npm run build
 npm run preview
 ```
 
+## Desktop App (Windows `.exe`)
+
+The web app can be packaged as a standalone Windows desktop application using
+Electron. On a Windows machine:
+
+```bash
+npm install
+npm run dist:win
+```
+
+This produces an NSIS installer and a portable `.exe` in the `release/` folder.
+The whole app is bundled and talks to Supabase directly over HTTPS — no local
+server is required. See `docs/desktop-exe-packaging.md` for full details,
+building from Linux/macOS (needs wine), CI builds, and rebranding the icon.
+
 ## Label Printing
 
 The app downloads dynamic BarTender `.btw` label files directly in the browser, using fixed-size templates bundled in `public/label-templates`:

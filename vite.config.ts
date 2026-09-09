@@ -7,7 +7,13 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const supabaseTarget = (env.VITE_SUPABASE_URL || "https://zsjmijuofklsybtynhrm.supabase.co").replace(/\/$/, "");
 
+  // When building for the Electron desktop shell the app is loaded from
+  // file://, so assets must be referenced with relative paths. The web/Vercel
+  // build keeps absolute ("/") paths.
+  const isElectron = env.ELECTRON_BUILD === "true" || process.env.ELECTRON_BUILD === "true";
+
   return {
+    base: isElectron ? "./" : "/",
     plugins: [
       react(),
       tailwindcss(),
