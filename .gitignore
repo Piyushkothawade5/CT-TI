@@ -12,6 +12,10 @@ dist/
 # npm lockfile (this project uses bun.lock)
 package-lock.json
 
+# Python
+__pycache__/
+*.pyc
+
 # Logs / OS
 *.log
 .DS_Store
