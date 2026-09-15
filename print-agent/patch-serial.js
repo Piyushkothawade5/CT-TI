@@ -149,6 +149,25 @@ function patchSerial(data, newSerial) {
   return { out, replaced };
 }
 
+// Refresh the visible "Mfg Year : YYYY" text to `year`, so a template saved in an
+// earlier year prints the year it is ACTUALLY produced (never a stale hardcoded year).
+// Length-preserving - both years are 4 digits. Best-effort: no-op if not present.
+function patchMfgYear(data, year) {
+  const out = data.slice();
+  const candidates = new Set(extractLengthPrefixedUtf16Text(data));
+  const full = decodeUtf16Le(data);
+  for (const match of full.matchAll(/[A-Za-z0-9 .,:/&()*\-]{4,}/g)) candidates.add(match[0]);
+
+  let replaced = 0;
+  for (const value of candidates) {
+    const m = value.match(/^(\s*Mfg\s*Year\s*:\s*)(\d{4})(.*)$/i);
+    if (!m) continue;
+    const newValue = fit(`${m[1]}${year}${m[3]}`, value.length);
+    replaced += replaceAllUtf16PreservingLength(out, value, newValue);
+  }
+  return { out, replaced };
+}
+
 // Set the document's "SerializedCount" (number of serialized labels a single print
 // job produces) to `count`. Stored as: the UTF-16LE name "SerializedCount", then a
 // `ff fe ff` value marker, then a 1-byte length + UTF-16LE digits. Returns count of
@@ -239,6 +258,11 @@ function main() {
     countReplaced = r.replaced;
   }
 
+  // Always refresh the manufacturing year to the current year at print time.
+  const currentYear = String(new Date().getFullYear());
+  const yearResult = patchMfgYear(working, currentYear);
+  working = yearResult.out;
+
   // The zlib text section is self-terminating and runs to EOF, and nothing in the
   // file records its size (verified across templates). So prefer the original byte
   // length when we can hit it (keeps the file identical), but fall back to a plain
@@ -258,7 +282,7 @@ function main() {
     console.error(`Injected serial ${newSerial}, but SerializedCount field was not found.`);
     process.exit(3);
   }
-  console.log(`Injected serial ${newSerial}${countArg ? `, SerializedCount=${countArg}` : ""}.`);
+  console.log(`Injected serial ${newSerial}${countArg ? `, SerializedCount=${countArg}` : ""}${yearResult.replaced ? `, MfgYear=${currentYear}` : ""}.`);
   process.exit(0);
 }
 
