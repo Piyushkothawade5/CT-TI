@@ -269,7 +269,10 @@ function getTapTurnValues(core: CoreData, ratioParts: ParsedRatio): number[] {
 
   if (tapCount <= 0) return ratioParts.primaryValues.slice(0, 1);
 
-  if (!segmentTurns.length && ratioTurnValues.length >= tapCount) {
+  // When the ratio itself enumerates the tap primaries (e.g. "200-100/5A"), the
+  // label ratio numerator must be those primary currents (100, then 200) — never
+  // the secondary turns, which would wrongly divide by the secondary current.
+  if (ratioTurnValues.length >= tapCount) {
     return ratioTurnValues.slice(0, tapCount);
   }
 

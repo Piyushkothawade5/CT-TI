@@ -22,11 +22,15 @@ import {
   useGetItem,
   useListWorkOrders,
   usePreviewWorkOrderTiNumber,
+  useTiLabelStatus,
   useUpdateWorkOrder,
+  TI_SOURCE_WORK_ORDER_FIELDS,
   type CoreData,
   type ItemInput,
   type UserProfile,
 } from "@/api-client";
+import { computeLabelProgress } from "@/lib/label-progress";
+import { LabelStatusBadge } from "@/components/work-order/LabelStatusBadge";
 import { ProfileTopBar } from "@/components/ProfileTopBar";
 import { AddItemModal } from "@/components/ti-form/AddItemModal";
 import { WorkOrderSearchModal } from "@/components/work-order/WorkOrderSearchModal";
@@ -61,6 +65,10 @@ const WORK_ORDER_FIELDS: Array<{
   type?: string;
   required?: boolean;
 }> = [...ORDER_FIELDS, ...ITEM_FIELDS, ...TRACEABILITY_FIELDS];
+
+// Fields locked once the linked TI is checked — the TI-source fields plus the TI
+// number itself.
+const TI_LOCKED_FIELDS = new Set<string>([...(TI_SOURCE_WORK_ORDER_FIELDS as string[]), "ti_no"]);
 
 export default function WorkOrder({
   profile,
@@ -110,6 +118,10 @@ export default function WorkOrder({
     ? records.find((record) => record.id === currentRecordId) || null
     : null;
   const hasCurrentRecord = Boolean(currentRecord);
+  const { data: tiLabelStatus } = useTiLabelStatus(currentRecord?.ti_no || "");
+  const labelProgress = computeLabelProgress(currentRecord?.qty, currentRecord?.sr_no, tiLabelStatus);
+  const isTiChecked = tiLabelStatus?.approval_status === "checked";
+  const isFieldTiLocked = (name: keyof WorkOrderFormData) => isTiChecked && TI_LOCKED_FIELDS.has(name);
   const isFormEnabled = userCanWrite && (!hasCurrentRecord || isEditMode) && !isSaving;
   const normalizedOurItemCode = cleanMasterItemCode(formData.our_item_code);
   const { data: masterItemData, isError: isMasterItemError, isFetching: isMasterItemFetching } = useGetItem(activeOurItemCode, {
@@ -469,18 +481,25 @@ export default function WorkOrder({
                     type="text"
                     value={formData.ti_no}
                     onChange={(event) => updateField("ti_no", event.target.value)}
-                    disabled={!isFormEnabled}
+                    disabled={!isFormEnabled || isFieldTiLocked("ti_no")}
                     data-work-order-field
                     data-work-order-name="ti_no"
                     className="w-48 border-b border-white/60 bg-transparent text-right font-mono font-bold tracking-wider text-white outline-none placeholder:text-white/50 disabled:opacity-90"
                     placeholder="Enter or keep suggested TI no."
                   />
                 </div>
-                <div className="flex justify-end">
-                  <span className="inline-flex rounded bg-white/15 px-3 py-1 text-xs font-bold uppercase tracking-wide text-white">
-                    {hasCurrentRecord ? (isEditMode ? "Editing" : "Saved") : userCanWrite ? "New" : "View Only"}
-                  </span>
-                </div>
+                {hasCurrentRecord ? (
+                  <div className="flex items-center justify-end gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-white/70">Labels:</span>
+                    <LabelStatusBadge progress={labelProgress} tone="onDark" size="md" />
+                  </div>
+                ) : (
+                  <div className="flex justify-end">
+                    <span className="inline-flex rounded bg-white/15 px-3 py-1 text-xs font-bold uppercase tracking-wide text-white">
+                      {userCanWrite ? "New" : "View Only"}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -501,7 +520,7 @@ export default function WorkOrder({
                           if (isFormEnabled) handleOurItemCodeLookup();
                         }}
                         onKeyDown={handleOurItemCodeKeyDown}
-                        disabled={!isFormEnabled}
+                        disabled={!isFormEnabled || isFieldTiLocked("our_item_code")}
                         data-work-order-field
                         data-work-order-name="our_item_code"
                         className="h-10 max-w-sm border-[#4a6fa5] bg-white focus-visible:ring-[#4a6fa5] disabled:bg-gray-50 disabled:text-gray-900"
@@ -517,7 +536,7 @@ export default function WorkOrder({
                       <Button
                         type="button"
                         onClick={() => handleOurItemCodeLookup("work_order")}
-                        disabled={!isFormEnabled}
+                        disabled={!isFormEnabled || isTiChecked}
                         className="bg-[#4a6fa5] hover:bg-[#3b5fc0]"
                       >
                         Check Item
@@ -549,7 +568,7 @@ export default function WorkOrder({
                       value={formData[field.name]}
                       type={field.type}
                       required={field.required}
-                      disabled={!isFormEnabled}
+                      disabled={!isFormEnabled || isFieldTiLocked(field.name)}
                       suggestions={
                         field.name === "customer"
                           ? distinctCustomers
@@ -582,7 +601,7 @@ export default function WorkOrder({
                       label={field.label}
                       value={formData[field.name]}
                       required={field.required}
-                      disabled={!isFormEnabled || field.name === "item_code"}
+                      disabled={!isFormEnabled || field.name === "item_code" || isFieldTiLocked(field.name)}
                       onChange={(value) => updateField(field.name, value)}
                     />
                   ))}
@@ -610,7 +629,7 @@ export default function WorkOrder({
                       fieldName={field.name}
                       label={field.label}
                       value={formData[field.name]}
-                      disabled={!isFormEnabled}
+                      disabled={!isFormEnabled || isFieldTiLocked(field.name)}
                       onChange={(value) => updateField(field.name, value)}
                     />
                   ))}
@@ -627,6 +646,7 @@ export default function WorkOrder({
         records={sortedRecords}
         onClose={() => setIsSearchOpen(false)}
         onSelect={openRecord}
+        canEdit={userCanWrite}
       />
       <AddItemModal
         open={isAddItemModalOpen}

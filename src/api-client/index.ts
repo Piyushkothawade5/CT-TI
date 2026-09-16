@@ -161,6 +161,33 @@ export interface TiLabelStatus {
   labels_issued: number;
   labels_reserved: number;
   labels_locked: boolean;
+  approval_status: ApprovalStatus | null;
+}
+
+// Lighter per-TI label summary (no reserved count) for batch listing.
+export interface TiLabelSummary {
+  ti_no: string;
+  quantity: string | null;
+  label_qty: number | null;
+  labels_issued: number;
+  labels_locked: boolean;
+  approval_status: ApprovalStatus | null;
+}
+
+export type UnlockRequestType = "ti" | "label";
+
+export interface UnlockRequest {
+  id: string;
+  ti_no: string;
+  request_type: UnlockRequestType;
+  reason: string | null;
+  status: "pending" | "resolved" | "cancelled";
+  requested_by: string | null;
+  requested_at: string;
+  resolved_by?: string | null;
+  resolved_at?: string | null;
+  // Embedded requester profile (Supabase join) for display in the admin queue.
+  requester?: { full_name?: string | null; initials?: string | null } | null;
 }
 
 export interface BeginPrintResult {
@@ -384,6 +411,21 @@ function getTiRecords(): TiRecord[] {
 
 function setTiRecords(records: TiRecord[]) {
   localStorage.setItem("ct_ti_records", JSON.stringify(records));
+}
+
+// Offline fallback store for unlock requests. Only the 'ti' path is usable
+// offline (label locking already requires Supabase), but we keep both here so
+// the shape is uniform.
+function getLocalUnlockRequests(): UnlockRequest[] {
+  try {
+    return JSON.parse(localStorage.getItem("ct_unlock_requests") || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function setLocalUnlockRequests(requests: UnlockRequest[]) {
+  localStorage.setItem("ct_unlock_requests", JSON.stringify(requests));
 }
 
 function getWorkOrders(): WorkOrderRecord[] {
@@ -1048,19 +1090,24 @@ async function updateSupabaseItem(itemNo: string, data: Partial<ItemInput>): Pro
 }
 
 function normalizeWorkOrderInput(data: WorkOrderInput): WorkOrderInput {
+  // Optional text fields coalesce to "" (not undefined) so a value the user
+  // deliberately cleared is actually sent in the PATCH body — JSON.stringify drops
+  // undefined keys, which would otherwise leave the column at its old value and
+  // make "erase to blank" silently revert. `our_item_code` (the required master
+  // link) and `created_by` stay undefined-when-empty so they are never wiped.
   return {
     work_order: normalizeText(data.work_order) || "",
-    customer: normalizeText(data.customer),
-    po_no: normalizeText(data.po_no),
-    po_date: normalizeText(data.po_date),
-    po_line_no: normalizeText(data.po_line_no),
-    item_code: normalizeText(data.item_code),
+    customer: normalizeText(data.customer) || "",
+    po_no: normalizeText(data.po_no) || "",
+    po_date: normalizeText(data.po_date) || "",
+    po_line_no: normalizeText(data.po_line_no) || "",
+    item_code: normalizeText(data.item_code) || "",
     our_item_code: data.our_item_code ? cleanItemNo(data.our_item_code) : undefined,
-    specification: normalizeText(data.specification),
-    qty: normalizeText(data.qty),
-    sr_no: normalizeText(data.sr_no),
-    ti_no: normalizeText(data.ti_no),
-    traceability_sr_no: normalizeText(data.traceability_sr_no),
+    specification: normalizeText(data.specification) || "",
+    qty: normalizeText(data.qty) || "",
+    sr_no: normalizeText(data.sr_no) || "",
+    ti_no: normalizeText(data.ti_no) || "",
+    traceability_sr_no: normalizeText(data.traceability_sr_no) || "",
     created_by: normalizeText(data.created_by),
     created_by_user_id: data.created_by_user_id || null,
   };
@@ -1098,7 +1145,7 @@ async function createSupabaseWorkOrder(data: WorkOrderInput): Promise<WorkOrderR
 // blocked (checked).
 // Note: traceability_sr_no is intentionally NOT here — it is a work-order-only
 // field and may be edited freely without gating or re-syncing the linked TI.
-const TI_SOURCE_WORK_ORDER_FIELDS: Array<keyof WorkOrderInput> = [
+export const TI_SOURCE_WORK_ORDER_FIELDS: Array<keyof WorkOrderInput> = [
   "our_item_code",
   "customer",
   "item_code",
@@ -1319,7 +1366,7 @@ async function rejectSupabaseTiRecord(tiNo: string, rejectionItems: RejectionIte
 
 async function fetchTiLabelStatus(tiNo: string): Promise<TiLabelStatus> {
   const rows = await supabaseFetch<Array<Record<string, unknown>>>(
-    `ct_ti_records?ti_no=eq.${eqFilter(tiNo)}&select=ti_no,quantity,label_qty,labels_issued,labels_reserved,labels_locked&limit=1`
+    `ct_ti_records?ti_no=eq.${eqFilter(tiNo)}&select=ti_no,quantity,label_qty,labels_issued,labels_reserved,labels_locked,approval_status&limit=1`
   );
   const record = rows[0];
   if (!record) throw new Error("TI record not found");
@@ -1330,7 +1377,24 @@ async function fetchTiLabelStatus(tiNo: string): Promise<TiLabelStatus> {
     labels_issued: Number(record.labels_issued ?? 0),
     labels_reserved: Number(record.labels_reserved ?? 0),
     labels_locked: Boolean(record.labels_locked),
+    approval_status: (record.approval_status as ApprovalStatus) ?? null,
   };
+}
+
+// Batch label status for every TI, keyed by ti_no — used by the Work Order search
+// grid's LABELS column to show print progress without one query per row.
+async function listSupabaseTiLabelStatuses(): Promise<TiLabelSummary[]> {
+  const rows = await supabaseFetch<Array<Record<string, unknown>>>(
+    "ct_ti_records?select=ti_no,quantity,label_qty,labels_issued,labels_locked,approval_status"
+  );
+  return rows.map((record) => ({
+    ti_no: String(record.ti_no || ""),
+    quantity: (record.quantity as string) ?? null,
+    label_qty: record.label_qty === null || record.label_qty === undefined ? null : Number(record.label_qty),
+    labels_issued: Number(record.labels_issued ?? 0),
+    labels_locked: Boolean(record.labels_locked),
+    approval_status: (record.approval_status as ApprovalStatus) ?? null,
+  }));
 }
 
 async function fetchSavedLabelExists(itemCode: string): Promise<boolean> {
@@ -1352,6 +1416,31 @@ async function unlockTiLabelsRequest(
   newQty?: number | null
 ): Promise<{ labels_issued: number; label_qty: number | null; locked: boolean }> {
   return rpc("unlock_ti_labels", { p_ti_no: tiNo, p_new_qty: newQty ?? null });
+}
+
+async function requestUnlockSupabase(
+  tiNo: string,
+  type: UnlockRequestType,
+  reason?: string | null
+): Promise<UnlockRequest> {
+  const result = await rpc<UnlockRequest | UnlockRequest[]>("request_unlock", {
+    p_ti_no: tiNo,
+    p_type: type,
+    p_reason: reason ?? null,
+  });
+  return Array.isArray(result) ? result[0] : result;
+}
+
+async function listPendingUnlockRequestsSupabase(): Promise<UnlockRequest[]> {
+  return supabaseFetch<UnlockRequest[]>(
+    "ct_unlock_requests?status=eq.pending" +
+      "&select=*,requester:requested_by(full_name,initials)" +
+      "&order=requested_at.asc"
+  );
+}
+
+async function resolveUnlockRequestSupabase(id: string): Promise<void> {
+  await rpc("resolve_unlock_request", { p_id: id });
 }
 
 async function createPrintJob(input: PrintJobInput): Promise<{ id: string }> {
@@ -1974,6 +2063,7 @@ export function useReopenTiRecord() {
       queryClient.invalidateQueries({ queryKey: ["ti-records"] });
       queryClient.invalidateQueries({ queryKey: ["ti-adjacent"] });
       queryClient.invalidateQueries({ queryKey: ["ti-status-counts"] });
+      queryClient.invalidateQueries({ queryKey: ["unlock-requests"] });
     },
   });
 }
@@ -1991,6 +2081,22 @@ export function useTiLabelStatus(
     // Auto-refresh so the actual printed count (committed by the agent a few
     // seconds after the operator prints) appears without a manual reload.
     refetchInterval: 4000,
+  });
+}
+
+export function useTiLabelStatuses(options?: { query?: { enabled?: boolean } }) {
+  return useQuery({
+    queryKey: ["ti-label-statuses"],
+    queryFn: async () => {
+      const statuses = isSupabaseConfigured ? await listSupabaseTiLabelStatuses() : [];
+      return { statuses };
+    },
+    enabled: options?.query?.enabled !== false && isSupabaseConfigured,
+    retry: false,
+    staleTime: 0,
+    // Auto-refresh so the actual printed count (committed by the agent a few
+    // seconds after the operator prints) appears without a manual reload.
+    refetchInterval: 5000,
   });
 }
 
@@ -2039,6 +2145,90 @@ export function useUnlockTiLabels() {
       queryClient.invalidateQueries({ queryKey: ["ti-label-status", tiNo] });
       queryClient.invalidateQueries({ queryKey: getGetTiRecordQueryKey(tiNo) });
       queryClient.invalidateQueries({ queryKey: ["ti-records"] });
+      queryClient.invalidateQueries({ queryKey: ["unlock-requests"] });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Unlock requests — operators raise them; admins see and clear the queue.
+// ---------------------------------------------------------------------------
+export function useUnlockRequests(options?: { query?: { enabled?: boolean } }) {
+  return useQuery({
+    queryKey: ["unlock-requests"],
+    queryFn: async (): Promise<UnlockRequest[]> => {
+      if (isSupabaseConfigured) return listPendingUnlockRequestsSupabase();
+      return getLocalUnlockRequests().filter((request) => request.status === "pending");
+    },
+    enabled: options?.query?.enabled !== false,
+    retry: false,
+    // Poll so a new request shows up for the admin without a manual reload.
+    refetchInterval: 8000,
+  });
+}
+
+export function useRequestUnlock() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      tiNo,
+      type,
+      reason,
+    }: {
+      tiNo: string;
+      type: UnlockRequestType;
+      reason?: string | null;
+    }): Promise<UnlockRequest> => {
+      if (isSupabaseConfigured) return requestUnlockSupabase(tiNo, type, reason);
+      if (type === "label") {
+        throw new Error("Label unlock requests require the online (Supabase) database.");
+      }
+      const requests = getLocalUnlockRequests();
+      const existing = requests.find(
+        (request) =>
+          request.ti_no === tiNo && request.request_type === type && request.status === "pending"
+      );
+      if (existing) {
+        if (reason) existing.reason = reason;
+        setLocalUnlockRequests(requests);
+        return existing;
+      }
+      const profile = readStoredProfile();
+      const created: UnlockRequest = {
+        id: (globalThis.crypto?.randomUUID?.() ?? String(Date.now())),
+        ti_no: tiNo,
+        request_type: type,
+        reason: reason?.trim() || null,
+        status: "pending",
+        requested_by: profile?.id ?? null,
+        requested_at: new Date().toISOString(),
+        requester: profile ? { full_name: profile.full_name, initials: profile.initials } : null,
+      };
+      requests.push(created);
+      setLocalUnlockRequests(requests);
+      return created;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["unlock-requests"] });
+    },
+  });
+}
+
+export function useResolveUnlockRequest() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id }: { id: string }): Promise<void> => {
+      if (isSupabaseConfigured) return resolveUnlockRequestSupabase(id);
+      const requests = getLocalUnlockRequests();
+      const target = requests.find((request) => request.id === id);
+      if (target) {
+        target.status = "resolved";
+        target.resolved_at = new Date().toISOString();
+        setLocalUnlockRequests(requests);
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["unlock-requests"] });
     },
   });
 }

@@ -1,5 +1,5 @@
 import React from "react";
-import { Loader2, Printer, Save, Lock, Unlock, Pencil } from "lucide-react";
+import { Loader2, Printer, Save, Lock, Unlock, Pencil, KeyRound } from "lucide-react";
 import type { TiRecordInput } from "@/api-client";
 import {
   useTiLabelStatus,
@@ -7,6 +7,8 @@ import {
   useUnlockTiLabels,
   useEnqueuePrintJob,
   useSavedLabelExists,
+  useRequestUnlock,
+  useUnlockRequests,
 } from "@/api-client";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
@@ -25,13 +27,9 @@ import { buildBarTenderBtwDownload } from "@/lib/bartender-btw";
 import {
   TAP_FIELD_NAMES,
   buildBarTenderLabelRows,
-  getOrderedLabelDiagramCores,
   getWireColourLabelLine,
   type BarTenderLabelRow,
   type BarTenderTapField,
-  type LabelDiagramOrientation,
-  type LabelDiagramP1Position,
-  type LabelDiagramTerminalPosition,
 } from "@/lib/ti-label-model";
 
 type TiLabelEditorDialogProps = {
@@ -72,6 +70,8 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
   const beginPrint = useBeginPrint();
   const unlockLabels = useUnlockTiLabels();
   const enqueueJob = useEnqueuePrintJob();
+  const requestUnlock = useRequestUnlock();
+  const [unlockReason, setUnlockReason] = React.useState("");
 
   const templateExists = savedExists.data === true;
   const status = labelStatus.data;
@@ -80,9 +80,19 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
   const remaining = qty != null ? Math.max(qty - issued, 0) : null;
   const locked = Boolean(status?.labels_locked);
 
+  // For an operator on a locked TI, surface whether they already have a pending
+  // label-unlock request so the button reflects "already sent".
+  const myRequests = useUnlockRequests({
+    query: { enabled: open && locked && canPrint },
+  });
+  const hasPendingRequest = (myRequests.data || []).some(
+    (request) => request.ti_no === tiNo && request.request_type === "label"
+  );
+
   React.useEffect(() => {
     if (!open || !data) return;
     setRow(buildBarTenderLabelRows(data)[0] || null);
+    setUnlockReason("");
   }, [data, open]);
 
   const tapRowCount = row?.tapRows.filter(Boolean).length || 0;
@@ -205,6 +215,20 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
     }
   };
 
+  const handleRequestUnlock = async () => {
+    if (!tiNo) return;
+    try {
+      await requestUnlock.mutateAsync({ tiNo, type: "label", reason: unlockReason.trim() || null });
+      toast({
+        title: "Unlock request sent",
+        description: "An admin has been notified and can unlock these labels.",
+      });
+      await myRequests.refetch();
+    } catch (error) {
+      toast({ variant: "destructive", title: "Request failed", description: getErrorMessage(error) });
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[92vh] max-w-6xl overflow-y-auto p-0">
@@ -225,6 +249,37 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
               <span className="inline-flex items-center gap-1 rounded bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
                 <Lock className="h-3 w-3" /> Locked — admin must unlock
               </span>
+            )}
+            {locked && canPrint && (
+              hasPendingRequest ? (
+                <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                  <KeyRound className="h-3 w-3" /> Unlock request sent
+                </span>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={unlockReason}
+                    onChange={(event) => setUnlockReason(event.target.value)}
+                    placeholder="Reason (optional)"
+                    className="h-8 w-48 text-xs"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-8 border-amber-400 text-amber-700 hover:bg-amber-50"
+                    onClick={handleRequestUnlock}
+                    disabled={requestUnlock.isPending}
+                  >
+                    {requestUnlock.isPending ? (
+                      <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <KeyRound className="mr-1 h-3.5 w-3.5" />
+                    )}
+                    Request Unlock
+                  </Button>
+                </div>
+              )
             )}
             {canPrint && !savedExists.isLoading && !templateExists && (
               <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
@@ -271,9 +326,7 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
             </div>
 
             <div className="space-y-3">
-              <DiagramControls row={row} updateField={updateField} />
               <LabelPreview row={row} />
-              <DiagramOrderControls row={row} updateField={updateField} />
             </div>
           </div>
         ) : (
@@ -326,392 +379,93 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
   );
 }
 
-function DiagramControls({
-  row,
-  updateField,
-}: {
-  row: BarTenderLabelRow;
-  updateField: (key: keyof BarTenderLabelRow, value: string) => void;
-}) {
-  const orientation = row.DIAGRAM_ORIENTATION || "vertical";
-  const p1Position = row.DIAGRAM_P1_POSITION || (orientation === "horizontal" ? "start" : "end");
-  const applyOrientationDefaults = (value: LabelDiagramOrientation) => {
-    updateField("DIAGRAM_ORIENTATION", value);
-    updateField("DIAGRAM_P1_POSITION", value === "horizontal" ? "start" : "end");
-    updateField("DIAGRAM_TERMINAL_POSITION", "end");
-    updateField("DIAGRAM_TERMINAL_ORDER", value === "horizontal" ? "start" : "end");
-    updateField("DIAGRAM_CORE_ORDER", "start");
-  };
-
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-blue-100 bg-white px-3 py-2 shadow-sm">
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold uppercase text-gray-600">Diagram</span>
-        <SegmentedChoice
-          options={[
-            { value: "vertical", label: "Vertical" },
-            { value: "horizontal", label: "Horizontal" },
-          ]}
-          value={orientation}
-          onChange={applyOrientationDefaults}
-        />
-      </div>
-
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold uppercase text-gray-600">P1</span>
-        <SegmentedChoice
-          options={[
-            { value: "start", label: "Upper / Left" },
-            { value: "end", label: "Lower / Right" },
-          ]}
-          value={p1Position}
-          onChange={(value) => updateField("DIAGRAM_P1_POSITION", value)}
-        />
-      </div>
-
-    </div>
-  );
-}
-
-function DiagramOrderControls({
-  row,
-  updateField,
-}: {
-  row: BarTenderLabelRow;
-  updateField: (key: keyof BarTenderLabelRow, value: string) => void;
-}) {
-  const orientation = row.DIAGRAM_ORIENTATION || "vertical";
-  const terminalPosition = row.DIAGRAM_TERMINAL_POSITION || "end";
-  const terminalOrder = row.DIAGRAM_TERMINAL_ORDER || (orientation === "horizontal" ? "start" : "end");
-  const coreOrder = row.DIAGRAM_CORE_ORDER || "start";
-
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-blue-100 bg-white px-3 py-2 shadow-sm">
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold uppercase text-gray-600">S1 Side</span>
-        <SegmentedChoice
-          options={[
-            { value: "start", label: "Left / Top" },
-            { value: "end", label: "Right / Bottom" },
-          ]}
-          value={terminalPosition}
-          onChange={(value) => updateField("DIAGRAM_TERMINAL_POSITION", value)}
-        />
-      </div>
-
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold uppercase text-gray-600">S Order</span>
-        <SegmentedChoice
-          options={[
-            { value: "start", label: "S1 First" },
-            { value: "end", label: "Last First" },
-          ]}
-          value={terminalOrder}
-          onChange={(value) => updateField("DIAGRAM_TERMINAL_ORDER", value)}
-        />
-      </div>
-
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold uppercase text-gray-600">Core Order</span>
-        <SegmentedChoice
-          options={[
-            { value: "start", label: "1 First" },
-            { value: "end", label: "Last First" },
-          ]}
-          value={coreOrder}
-          onChange={(value) => updateField("DIAGRAM_CORE_ORDER", value)}
-        />
-      </div>
-    </div>
-  );
-}
-
-function SegmentedChoice<TValue extends string>({
-  options,
-  value,
-  onChange,
-}: {
-  options: Array<{ value: TValue; label: string }>;
-  value: TValue;
-  onChange: (value: TValue) => void;
-}) {
-  return (
-    <div className="inline-flex overflow-hidden rounded border border-[#2a4080] bg-white">
-      {options.map((option) => {
-        const isActive = option.value === value;
-        return (
-          <button
-            key={option.value}
-            type="button"
-            onClick={() => onChange(option.value)}
-            className={`px-3 py-1 text-xs font-semibold transition ${
-              isActive
-                ? "bg-[#2a4080] text-white"
-                : "bg-white text-[#2a4080] hover:bg-blue-50"
-            }`}
-          >
-            {option.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
+type LabelLine =
+  | { kind: "full"; text: string }
+  // `alignEnd` right-aligns the last cell. `endAuto` lets the leading cell grow to
+  // fill the row while the last cell only takes its content width (hugged right).
+  | { kind: "cols"; cells: string[]; alignEnd?: boolean; endAuto?: boolean };
 
 function LabelPreview({ row }: { row: BarTenderLabelRow }) {
   const wireColourLine = getWireColourLabelLine(row.WIRE_COLOUR);
-  const diagramCores = getOrderedLabelDiagramCores(row);
   const tapRows = row.tapRows.filter(isPresent);
-  const layout = getPreviewLayout(tapRows.length);
+
+  // Build the label as a simple, uniform stack of lines. Every line shares one
+  // font size and one gap, so spacing and size stay consistent no matter how many
+  // tap rows there are. Column lines (Sr No/Item No etc.) split evenly.
+  const lines: LabelLine[] = [];
+  lines.push({ kind: "full", text: row.MFG });
+  lines.push({ kind: "cols", cells: [`Sr No : ${row.SR_NO}`, `Item No : ${row.ITEM_NO}`] });
+  if (isPresent(row.CTR)) lines.push({ kind: "full", text: `CTR : ${row.CTR}` });
+  for (const tapRow of tapRows) lines.push({ kind: "full", text: tapRow });
+  const electrical = [
+    isPresent(row.IL) ? `I.L : ${row.IL}` : "",
+    isPresent(row.FREQ) ? `Freq : ${row.FREQ}` : "",
+    isPresent(row.INS_CLASS) ? `INS CL : ${row.INS_CLASS}` : "",
+  ];
+  if (electrical.some(Boolean)) lines.push({ kind: "cols", cells: electrical });
+  // Bottom rows use three equal columns so Ref. Std / STC / Made in India line up
+  // vertically with the I.L / Freq / INS CL row above, with equal spacing. The Mfg
+  // Year row keeps the same columns so it aligns under Made in India.
+  const refStd = isPresent(row.REF_STD) ? row.REF_STD : "";
+  const stcText = isPresent(row.STC) ? `STC : ${row.STC}` : "";
+  const madeInIndia = isPresent(row.MADE_IN_INDIA) ? row.MADE_IN_INDIA : "";
+  if (refStd || stcText || madeInIndia) {
+    lines.push({ kind: "cols", cells: [refStd, stcText, madeInIndia], alignEnd: true });
+  }
+  const mfgYear = isPresent(row.MFG_YEAR) ? `Mfg Year : ${row.MFG_YEAR}` : "";
+  if (isPresent(wireColourLine) || mfgYear) {
+    // Wire Color grows to use the whole width; Mfg Year stays hugged to the right.
+    lines.push({ kind: "cols", cells: [wireColourLine, mfgYear], alignEnd: true, endAuto: true });
+  }
+
+  // One font size for the whole label, derived from the line count so everything
+  // fits the fixed 100×35 label. More rows → smaller font (never below 6px); few
+  // rows are capped so the text doesn't balloon. `cqh` = 1% of the label height.
+  const totalLines = Math.max(lines.length, 1);
+  const fontPref = 100 / (totalLines * 1.85 + 2);
+  const fontSize = `clamp(6px, ${fontPref.toFixed(2)}cqh, 20px)`;
 
   return (
     <div className="flex min-w-0 items-start justify-center bg-[#aec7dd] p-5">
       <div
-        className="relative w-full max-w-[820px] overflow-hidden rounded-[22px] bg-white px-[1.5%] py-[1.2%] font-sans font-extrabold text-black shadow-lg"
-        style={{ aspectRatio: layout.previewAspectRatio }}
+        className="w-full max-w-[760px] overflow-hidden rounded-[14px] bg-white shadow-lg"
+        style={{ aspectRatio: "100 / 35", containerType: "size" }}
       >
-        <div className="absolute left-[1.5%] right-[1.5%] top-[4%] truncate leading-none" style={{ fontSize: layout.titleFontSize }}>
-          {row.MFG}
-        </div>
-
-        <div className="absolute left-[1.5%] top-[17%] w-[42%] truncate leading-none" style={{ fontSize: layout.mainFontSize }}>
-          Sr No : {row.SR_NO}
-        </div>
-        <div className="absolute left-[45%] top-[17%] w-[35%] truncate leading-none" style={{ fontSize: layout.mainFontSize }}>
-          Item No : {row.ITEM_NO}
-        </div>
-
-        {isPresent(row.CTR) && (
-          <div className="absolute left-[1.5%] top-[29%] w-[42%] truncate leading-none" style={{ fontSize: layout.mainFontSize }}>
-            CTR : {row.CTR}
-          </div>
-        )}
-        {isPresent(row.STC) && (
-          <div className="absolute left-[45%] top-[29%] w-[25%] truncate leading-none" style={{ fontSize: layout.mainFontSize }}>
-            STC : {row.STC}
-          </div>
-        )}
-
         <div
-          className="absolute left-[1.5%] w-[70%] overflow-hidden"
-          style={{
-            top: layout.tapTop,
-            maxHeight: layout.tapMaxHeight,
-            fontSize: layout.tapFontSize,
-            lineHeight: layout.tapLineHeight,
-          }}
+          className="flex h-full flex-col justify-between font-sans font-extrabold leading-[1.15] text-black"
+          style={{ fontSize, rowGap: "0.25em", padding: "3.5cqh 3.5%" }}
         >
-          {tapRows.map((tapRow, index) => (
-            <div key={`${index}-${tapRow}`} className="truncate">{tapRow}</div>
-          ))}
-        </div>
-
-        <DiagramPreview row={row} diagramCores={diagramCores} layout={layout} />
-
-        <div
-          className="absolute left-[1.5%] right-[24%] grid grid-cols-[.86fr_.74fr_.9fr] gap-[4%] leading-none"
-          style={{ top: layout.electricalTop, fontSize: layout.footerFontSize }}
-        >
-          <div className="truncate">{isPresent(row.IL) ? `I.L : ${row.IL}` : ""}</div>
-          <div className="truncate">{isPresent(row.FREQ) ? `Freq : ${row.FREQ}` : ""}</div>
-          <div className="truncate">{isPresent(row.INS_CLASS) ? `INS CL : ${row.INS_CLASS}` : ""}</div>
-        </div>
-
-        <div
-          className="absolute left-[1.5%] w-[36%] truncate leading-none"
-          style={{ top: layout.refStdTop, fontSize: layout.noteFontSize }}
-        >
-          {isPresent(row.REF_STD) ? row.REF_STD : ""}
-        </div>
-        <div
-          className="absolute left-[1.5%] w-[70%] truncate leading-none"
-          style={{ bottom: layout.bottomInset, fontSize: layout.noteFontSize }}
-        >
-          {wireColourLine}
-        </div>
-
-        <div
-          className="absolute right-[3%] w-[18%] truncate text-right leading-none"
-          style={{ top: layout.madeInIndiaTop, fontSize: layout.noteFontSize }}
-        >
-          {isPresent(row.MADE_IN_INDIA) ? row.MADE_IN_INDIA : ""}
-        </div>
-        <div
-          className="absolute right-[3%] w-[22%] truncate text-right leading-none"
-          style={{ bottom: layout.bottomInset, fontSize: layout.noteFontSize }}
-        >
-          {isPresent(row.MFG_YEAR) ? `Mfg Year : ${row.MFG_YEAR}` : ""}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-type PreviewLayout = {
-  previewAspectRatio: string;
-  titleFontSize: string;
-  mainFontSize: string;
-  tapFontSize: string;
-  tapLineHeight: number;
-  tapTop: string;
-  tapMaxHeight: string;
-  footerFontSize: string;
-  noteFontSize: string;
-  electricalTop: string;
-  refStdTop: string;
-  madeInIndiaTop: string;
-  bottomInset: string;
-  diagramFontSize: string;
-  horizontalDiagramTop: string;
-  horizontalDiagramWidth: string;
-  verticalDiagramTop: string;
-  verticalDiagramWidth: string;
-};
-
-function getPreviewLayout(tapRowCount: number): PreviewLayout {
-  const extraRows = Math.max(0, tapRowCount - 2);
-  const previewHeight = Math.min(90, 35 + extraRows * 5);
-  const hasManyRows = tapRowCount >= 5;
-  const hasSeveralRows = tapRowCount >= 3;
-
-  return {
-    previewAspectRatio: `100 / ${previewHeight}`,
-    titleFontSize: "clamp(11px, 1.38vw, 17px)",
-    mainFontSize: "clamp(10px, 1.28vw, 16px)",
-    tapFontSize: "clamp(10px, 1.22vw, 15px)",
-    tapLineHeight: 1.08,
-    tapTop: hasManyRows ? "37%" : hasSeveralRows ? "39%" : "41%",
-    tapMaxHeight: hasManyRows ? "36%" : hasSeveralRows ? "28%" : "22%",
-    footerFontSize: "clamp(9px, 1.12vw, 14px)",
-    noteFontSize: "clamp(7px, .95vw, 11px)",
-    electricalTop: hasManyRows ? "77%" : hasSeveralRows ? "69%" : "66%",
-    refStdTop: hasManyRows ? "86%" : hasSeveralRows ? "80%" : "79%",
-    madeInIndiaTop: hasManyRows ? "84%" : hasSeveralRows ? "78%" : "77%",
-    bottomInset: "6%",
-    diagramFontSize: "clamp(8px, 1.05vw, 13px)",
-    horizontalDiagramTop: hasManyRows ? "18%" : hasSeveralRows ? "20%" : "21%",
-    horizontalDiagramWidth: hasManyRows ? "30%" : hasSeveralRows ? "24%" : "14%",
-    verticalDiagramTop: "31%",
-    verticalDiagramWidth: hasManyRows ? "25%" : "24%",
-  };
-}
-
-function DiagramPreview({
-  row,
-  diagramCores,
-  layout,
-}: {
-  row: BarTenderLabelRow;
-  diagramCores: ReturnType<typeof getOrderedLabelDiagramCores>;
-  layout: PreviewLayout;
-}) {
-  const orientation = (row.DIAGRAM_ORIENTATION || "vertical") as LabelDiagramOrientation;
-  const p1Position = (row.DIAGRAM_P1_POSITION || (orientation === "horizontal" ? "start" : "end")) as LabelDiagramP1Position;
-  const terminalPosition = (row.DIAGRAM_TERMINAL_POSITION || "end") as LabelDiagramTerminalPosition;
-  const startLabel = p1Position === "end" ? "P2" : "P1";
-  const endLabel = p1Position === "end" ? "P1" : "P2";
-
-  if (orientation === "horizontal") {
-    return (
-      <div
-        className="absolute right-[4%] flex flex-col items-center leading-none"
-        style={{
-          top: layout.horizontalDiagramTop,
-          width: layout.horizontalDiagramWidth,
-          fontSize: layout.diagramFontSize,
-        }}
-      >
-        <div>{startLabel}</div>
-        <TerminalStackBlock diagramCores={diagramCores} className="mt-[1%] w-full px-[6%] py-[6%]" />
-        <div className="mt-[3%]">{endLabel}</div>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className="absolute right-[2.5%] flex items-center justify-center gap-[4%] leading-none"
-      style={{
-        top: layout.verticalDiagramTop,
-        width: layout.verticalDiagramWidth,
-        fontSize: layout.diagramFontSize,
-      }}
-    >
-      <div className="rotate-90 whitespace-nowrap">{startLabel}</div>
-      <TerminalBlock diagramCores={diagramCores} terminalPosition={terminalPosition} className="flex-1 px-[7%] py-[8%]" />
-      <div className="rotate-90 whitespace-nowrap">{endLabel}</div>
-    </div>
-  );
-}
-
-function TerminalStackBlock({
-  diagramCores,
-  className = "",
-}: {
-  diagramCores: ReturnType<typeof getOrderedLabelDiagramCores>;
-  className?: string;
-}) {
-  return (
-    <div className={`border-2 border-black ${className}`}>
-      <div
-        className="grid items-center"
-        style={{
-          gridTemplateColumns: `repeat(${Math.max(diagramCores.length, 1)}, minmax(0, 1fr))`,
-          columnGap: "clamp(3px, .45vw, 7px)",
-          rowGap: "clamp(3px, .45vw, 7px)",
-        }}
-      >
-        {diagramCores.map((core) => (
-          <div
-            key={core.coreNumber}
-            className="grid min-w-0 justify-items-center"
-            style={{
-              rowGap: "clamp(3px, .4vw, 6px)",
-            }}
-          >
-            {core.terminals.map((terminal) => (
-              <div key={`stack-${core.coreNumber}-${terminal}`} className="flex flex-col items-center gap-[2px]">
-                <span className="block aspect-square w-[clamp(8px,.95vw,13px)] border-2 border-black" />
-                <span className="text-center text-[clamp(7px,.9vw,12px)] leading-none">{terminal}</span>
+          {lines.map((line, index) =>
+            line.kind === "full" ? (
+              <div key={index} className="truncate">
+                {line.text}
               </div>
-            ))}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function TerminalBlock({
-  diagramCores,
-  terminalPosition,
-  className = "",
-}: {
-  diagramCores: ReturnType<typeof getOrderedLabelDiagramCores>;
-  terminalPosition: LabelDiagramTerminalPosition;
-  className?: string;
-}) {
-  const labelsAtStart = terminalPosition !== "end";
-
-  return (
-    <div className={`border-2 border-black ${className}`}>
-      {diagramCores.map((core) => (
-        <div key={core.coreNumber} className="mb-[5%] last:mb-0">
-          <div className="flex justify-center gap-[10%]">
-            {core.terminals.map((terminal) => (
-              <div
-                key={`box-${core.coreNumber}-${terminal}`}
-                className={`flex items-center gap-[2px] ${labelsAtStart ? "flex-row-reverse" : ""}`}
-              >
-                <span className="block aspect-square w-[clamp(7px,.9vw,12px)] border-2 border-black" />
-                <span className={`${labelsAtStart ? "-rotate-90" : "rotate-90"} text-[clamp(6px,.9vw,11px)] leading-none`}>
-                  {terminal}
-                </span>
+            ) : (
+              <div key={index} className="flex" style={{ columnGap: "0.6em" }}>
+                {line.cells.map((cell, cellIndex) => {
+                  const isLast = cellIndex === line.cells.length - 1;
+                  const isEnd = line.alignEnd && isLast;
+                  const hug = line.endAuto && isLast;
+                  return (
+                    <div
+                      key={cellIndex}
+                      className={`min-w-0 truncate ${hug ? "flex-none" : "flex-1"} ${
+                        isEnd ? "text-right" : "text-left"
+                      }`}
+                      // Left-aligned columns (Item No, etc.) keep a steady right gap so
+                      // the text looks consistent whatever its length; right-aligned
+                      // notes hug the edge.
+                      style={{ paddingRight: isEnd ? undefined : "1.1em" }}
+                    >
+                      {cell}
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-          </div>
+            )
+          )}
         </div>
-      ))}
+      </div>
     </div>
   );
 }

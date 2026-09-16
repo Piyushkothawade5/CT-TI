@@ -3,7 +3,7 @@ import { useForm, Controller, useWatch } from "react-hook-form";
 import {
   Save, FilePlus, Search, ChevronLeft, ChevronRight, Edit3, Printer, FileText, Settings, CalendarDays,
   CheckCircle2, ShieldCheck, LockKeyhole, XCircle, ClipboardList, Trash2, Tags,
-  Eye, EyeOff, X,
+  Eye, EyeOff, X, KeyRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,9 +15,11 @@ import {
   useDistinctTiValues, useDistinctCtTypes, getCustomerForItemAsync,
   getFirstTiForItemCustomerAsync, useCheckTiRecord, useReopenTiRecord, useRejectTiRecord,
   useTiStatusCounts, canCheckTi, canWriteTi, useListItems, useListTiNumbers, useListTiRecords, useListWorkOrders,
-  useUpdateWorkOrder,
+  useUpdateWorkOrder, useRequestUnlock, useUnlockRequests, useTiLabelStatus,
   compareTiNumberValues,
 } from "@/api-client";
+import { computeLabelProgress } from "@/lib/label-progress";
+import { LabelStatusBadge } from "@/components/work-order/LabelStatusBadge";
 import type { TiRecordInput, CoreData, ItemInput, UserProfile, ApprovalStatus, RejectionItem, WorkOrderInput, WorkOrderRecord } from "@/api-client";
 import { useQueryClient } from "@tanstack/react-query";
 import { SearchModal } from "@/components/ti-form/SearchModal";
@@ -27,6 +29,7 @@ import { downloadTiPdf, printTiPdf } from "@/components/ti-form/downloadTiPdf";
 import { formatDisplayDate, parseDisplayDate, todayLocalIso } from "@/lib/date-format";
 import { calculateCoreFromDimensions, calculateTapTurns, expandRatioByCore, formatCoreWeight } from "@/lib/core-calculations";
 import { AdminPanel } from "@/components/admin/AdminPanel";
+import { UnlockRequestsDialog } from "@/components/admin/UnlockRequestsDialog";
 import { ProfileTopBar } from "@/components/ProfileTopBar";
 import { buildItemTiFormatMap, getItemTiFormat, normalizeItemNo } from "@/lib/item-ti-compatibility";
 import { getPendingWorkOrderSummaryFromRecords, mapWorkOrderToTiDraft, mergeTiFormWithItemMaster } from "@/lib/work-orders";
@@ -184,6 +187,7 @@ export default function Home({
   const [searchStatusFilter, setSearchStatusFilter] = useState<ApprovalStatus | "all">("all");
   const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
+  const [isUnlockPanelOpen, setIsUnlockPanelOpen] = useState(false);
   const [isLabelEditorOpen, setIsLabelEditorOpen] = useState(false);
   const [isDrawingViewerOpen, setIsDrawingViewerOpen] = useState(false);
   const [itemModalMode, setItemModalMode] = useState<"create" | "edit">("create");
@@ -250,6 +254,14 @@ export default function Home({
   const checkTiMutation = useCheckTiRecord();
   const rejectTiMutation = useRejectTiRecord();
   const reopenTiMutation = useReopenTiRecord();
+  const requestUnlockMutation = useRequestUnlock();
+  // Admins watch the pending unlock-request queue; operators see their own so the
+  // "Request Unlock" button can show as already sent.
+  const { data: unlockRequests = [] } = useUnlockRequests();
+  const pendingUnlockCount = unlockRequests.length;
+  const hasPendingTiUnlockRequest = unlockRequests.some(
+    (request) => request.ti_no === currentTiNo && request.request_type === "ti"
+  );
 
   const form = useForm<TiRecordInput>({
     defaultValues: {
@@ -272,6 +284,12 @@ export default function Home({
   );
   const currentApprovalStatus = (watchedApprovalStatus || tiRecordData?.approval_status || "pending_check") as ApprovalStatus;
   const hasPersistedTiRecord = Boolean(currentTiNo);
+  const { data: tiLabelStatus } = useTiLabelStatus(currentTiNo || "");
+  const labelProgress = computeLabelProgress(
+    tiRecordData?.quantity as string | undefined,
+    tiRecordData?.serial_number as string | undefined,
+    tiLabelStatus
+  );
   const isChecked = currentApprovalStatus === "checked";
   const isRejected = currentApprovalStatus === "rejected";
   const isLockedStatus = isChecked;
@@ -911,6 +929,18 @@ export default function Home({
     }
   };
 
+  const handleRequestTiUnlock = async () => {
+    if (!currentTiNo || !isLockedStatus) return;
+    const reason = window.prompt("Reason for unlock request (optional):", "");
+    if (reason === null) return; // cancelled
+    try {
+      await requestUnlockMutation.mutateAsync({ tiNo: currentTiNo, type: "ti", reason: reason.trim() || null });
+      toast({ title: "Unlock request sent", description: "An admin has been notified and can reopen this TI." });
+    } catch (error) {
+      toast({ variant: "destructive", title: "Request failed", description: error instanceof Error ? error.message : String(error) });
+    }
+  };
+
   const revealIfNeeded = (element: HTMLElement | null) => {
     if (!element) return;
     const rect = element.getBoundingClientRect();
@@ -999,7 +1029,7 @@ export default function Home({
 
   // â”€â”€ Arrow-key navigation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  const hideTopBar = isSearchModalOpen || isAddItemModalOpen || isAdminPanelOpen || isLabelEditorOpen;
+  const hideTopBar = isSearchModalOpen || isAddItemModalOpen || isAdminPanelOpen || isUnlockPanelOpen || isLabelEditorOpen;
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -1023,6 +1053,14 @@ export default function Home({
         {userCanCheck && <SidebarButton icon={<XCircle />} title="Reject" onClick={handleRejectTi}
           disabled={!currentTiNo || isLockedStatus || isRejected || isEditMode || isNewMode || !hasCorrectedRejectionItems || rejectTiMutation.isPending} />}
         {userIsAdmin && <SidebarButton icon={<LockKeyhole />} title="Reopen" onClick={handleReopenTi} disabled={!currentTiNo || !isLockedStatus || reopenTiMutation.isPending} />}
+        {userCanWrite && !userIsAdmin && isLockedStatus && (
+          <SidebarButton
+            icon={<KeyRound />}
+            title={hasPendingTiUnlockRequest ? "Unlock requested" : "Request Unlock"}
+            onClick={handleRequestTiUnlock}
+            disabled={!currentTiNo || hasPendingTiUnlockRequest || requestUnlockMutation.isPending}
+          />
+        )}
         <SidebarButton icon={<Printer />} title="Print" onClick={handlePrintPdf} disabled={!isChecked} />
         <SidebarButton icon={<FileText />} title="PDF" onClick={handleDownloadPdf} disabled={!isChecked} />
         {canUseLabels && <SidebarButton icon={<Tags />} title="Labels" onClick={handleDownloadLabels} disabled={!isChecked} />}
@@ -1039,6 +1077,8 @@ export default function Home({
             onPendingClick={userCanCheck ? () => openSearchWithStatus("pending_check") : undefined}
             rejectedCount={viewerOnlyChecked ? 0 : statusCounts.rejected}
             onRejectedClick={viewerOnlyChecked ? undefined : () => openSearchWithStatus("rejected")}
+            unlockRequestCount={userIsAdmin ? pendingUnlockCount : 0}
+            onUnlockRequestsClick={userIsAdmin ? () => setIsUnlockPanelOpen(true) : undefined}
           />
         )}
 
@@ -1048,8 +1088,17 @@ export default function Home({
           drawing={activeDrawing}
           onClose={() => setIsDrawingViewerOpen(false)}
         >
-        <div id="ti-form" onFocusCapture={handleFormFocus} onKeyDown={handleFormKeyDown} className="px-6 py-6 flex justify-center">
-          <div className="w-full max-w-5xl bg-white shadow-lg border border-gray-200">
+        <div id="ti-form" onFocusCapture={handleFormFocus} onKeyDown={handleFormKeyDown} className="px-6 pb-6 pt-2 flex justify-center">
+          <div className="w-full max-w-5xl">
+          {/* Approval status — sits flush on the top-right edge of the header card */}
+          {hasPersistedTiRecord && (
+            <div className="flex justify-end">
+              <span className={`inline-flex items-center rounded-t px-2.5 py-0.5 text-[10px] font-semibold ${approvalStatusBadgeClass(currentApprovalStatus)}`}>
+                {sentenceCase(approvalStatusLabel(currentApprovalStatus))}
+              </span>
+            </div>
+          )}
+          <div className="bg-white shadow-lg border border-gray-200">
           {/* Header */}
           <div className="bg-gradient-to-r from-[#3b5fc0] to-[#6b8dd6] p-6 text-white flex justify-between items-center">
             <div className="flex items-center space-x-4">
@@ -1083,10 +1132,9 @@ export default function Home({
                 )} />
               </div>
               {hasPersistedTiRecord && (
-                <div className="flex justify-end">
-                  <span className={`inline-flex items-center rounded px-3 py-1 text-xs font-bold uppercase tracking-wide ${approvalStatusBadgeClass(currentApprovalStatus)}`}>
-                    {approvalStatusLabel(currentApprovalStatus)}
-                  </span>
+                <div className="flex items-center justify-end gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-white/70">Labels:</span>
+                  <LabelStatusBadge progress={labelProgress} tone="onDark" size="md" />
                 </div>
               )}
             </div>
@@ -1329,6 +1377,7 @@ export default function Home({
               </section>
             </div>
           </div>
+          </div>
         </div>
         </div>
         </DrawingSplitLayout>
@@ -1375,7 +1424,10 @@ export default function Home({
           setIsAddItemModalOpen(false);
         }} />
       {userIsAdmin && (
-        <AdminPanel open={isAdminPanelOpen} onOpenChange={setIsAdminPanelOpen} />
+        <>
+          <AdminPanel open={isAdminPanelOpen} onOpenChange={setIsAdminPanelOpen} />
+          <UnlockRequestsDialog open={isUnlockPanelOpen} onOpenChange={setIsUnlockPanelOpen} />
+        </>
       )}
       <TiLabelEditorDialog
         open={isLabelEditorOpen}
@@ -1969,6 +2021,11 @@ function approvalStatusLabel(status?: ApprovalStatus | null): string {
   if (status === "checked") return "Checked";
   if (status === "rejected") return "Rejected";
   return "Pending Check";
+}
+
+// Capitalize only the first letter, lowercasing the rest ("Pending Check" → "Pending check").
+function sentenceCase(text: string): string {
+  return text ? text.charAt(0).toUpperCase() + text.slice(1).toLowerCase() : text;
 }
 
 function approvalStatusBadgeClass(status?: ApprovalStatus | null): string {

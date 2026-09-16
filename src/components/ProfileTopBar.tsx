@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { BadgeCheck, Clock3, FileX2, LayoutGrid, LogOut, Mail, Shield, UserRound } from "lucide-react";
+import { BadgeCheck, Clock3, FileX2, KeyRound, LayoutGrid, LogOut, Mail, Shield, UserRound } from "lucide-react";
 import type { UserProfile } from "@/api-client";
 
 export function ProfileTopBar({
@@ -10,6 +10,8 @@ export function ProfileTopBar({
   onPendingClick,
   rejectedCount = 0,
   onRejectedClick,
+  unlockRequestCount = 0,
+  onUnlockRequestsClick,
   onModulesClick,
 }: {
   profile: UserProfile;
@@ -19,12 +21,15 @@ export function ProfileTopBar({
   onPendingClick?: () => void;
   rejectedCount?: number;
   onRejectedClick?: () => void;
+  unlockRequestCount?: number;
+  onUnlockRequestsClick?: () => void;
   onModulesClick?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const hasPendingItems = pendingCount > 0;
   const hasRejectedItems = rejectedCount > 0;
+  const hasUnlockRequests = unlockRequestCount > 0;
 
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
@@ -98,6 +103,29 @@ export function ProfileTopBar({
                 }`}
               >
                 {rejectedCount}
+              </span>
+            </button>
+          )}
+
+          {onUnlockRequestsClick && (
+            <button
+              type="button"
+              onClick={onUnlockRequestsClick}
+              className={`relative flex h-9 w-9 items-center justify-center rounded-full border transition-colors ${
+                hasUnlockRequests
+                  ? "border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100"
+                  : "border-gray-200 bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
+              title="Unlock requests"
+              aria-label="Unlock requests"
+            >
+              <KeyRound className="h-4 w-4" />
+              <span
+                className={`absolute -right-1.5 -top-1.5 min-w-5 rounded-full border border-white px-1 text-center text-[10px] font-bold leading-5 shadow-sm ${
+                  hasUnlockRequests ? "bg-orange-500 text-white" : "bg-gray-100 text-gray-600"
+                }`}
+              >
+                {unlockRequestCount}
               </span>
             </button>
           )}
