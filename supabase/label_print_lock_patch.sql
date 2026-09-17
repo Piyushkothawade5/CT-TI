@@ -274,8 +274,15 @@ update public.ct_print_jobs set btw_base64 = null
 where btw_base64 is not null and status in ('saved', 'done');
 
 -- ---------------------------------------------------------------------------
--- 7. unlock_ti_labels — admin clears the lock (and any stuck reservations)
+-- 7. unlock_ti_labels — admin clears the lock and resets for a FULL REDO.
 -- ---------------------------------------------------------------------------
+-- Business rule: unlocking labels means "start this TI's labels over from the
+-- beginning." The printed count is reset to 0, so the next print restarts the
+-- SAME serial numbers from the original seed (labels_issued drives the serial
+-- offset). Use this when the printed batch is being reprinted from scratch.
+--
+-- The ct_ti_label_batches rows from the earlier run are KEPT as history (an audit
+-- trail that a first run happened); only the live counter on the TI resets.
 create or replace function public.unlock_ti_labels(p_ti_no text, p_new_qty integer default null)
 returns jsonb
 language plpgsql
@@ -289,12 +296,13 @@ begin
 
   select * into rec from public.ct_ti_records where ti_no = p_ti_no for update;
   if rec.id is null then raise exception 'TI record not found: %', p_ti_no; end if;
-  if p_new_qty is not null and p_new_qty < rec.labels_issued then
-    raise exception 'New quantity (%) is below labels already printed (%)', p_new_qty, rec.labels_issued;
+  if p_new_qty is not null and p_new_qty < 1 then
+    raise exception 'New quantity must be at least 1';
   end if;
 
   update public.ct_ti_records
   set label_qty = coalesce(p_new_qty, label_qty),
+      labels_issued = 0,       -- full redo: reset printed count; serials restart from the seed
       labels_reserved = 0,
       labels_locked = false,
       labels_locked_by = null,
@@ -303,6 +311,45 @@ begin
   returning * into rec;
 
   return jsonb_build_object('labels_issued', rec.labels_issued, 'label_qty', rec.label_qty, 'locked', rec.labels_locked);
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 7b. cancel_print — operator (or admin) releases an OPEN print session
+-- ---------------------------------------------------------------------------
+-- Shop-floor case: an operator clicks Print, the label opens in BarTender, they
+-- close it WITHOUT printing, then want to print again. begin_print's in-progress
+-- guard blocks the second print until that abandoned session ends. This lets the
+-- operator who opened it (or an admin) end their own live 'pending'/'opened'
+-- print job for this TI right away, so they can re-print without waiting for the
+-- agent's no-print timeout. It records nothing: committed = true means the apply
+-- trigger never advances labels_issued (the operator simply reprints).
+create or replace function public.cancel_print(p_ti_no text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  me public.profiles;
+  n integer;
+begin
+  select * into me from public.current_profile();
+  if me.id is null or me.is_active is not true then
+    raise exception 'Sign in to cancel a print';
+  end if;
+
+  update public.ct_print_jobs
+  set status = 'error',
+      committed = true,
+      error = 'Print session cancelled by ' || coalesce(me.initials, 'operator') || '.'
+  where ti_no = p_ti_no
+    and action = 'print'
+    and status in ('pending', 'opened')
+    and (created_by = me.id or public.is_admin());
+
+  get diagnostics n = row_count;
+  return jsonb_build_object('cancelled', n);
 end;
 $$;
 
@@ -365,4 +412,5 @@ grant execute on function public.saved_label_exists(text) to authenticated;
 grant execute on function public.ct_label_serial_at(text, integer) to authenticated;
 grant execute on function public.ct_label_serial_seed(text, text) to authenticated;
 grant execute on function public.begin_print(text, text) to authenticated;
+grant execute on function public.cancel_print(text) to authenticated;
 grant execute on function public.unlock_ti_labels(text, integer) to authenticated;

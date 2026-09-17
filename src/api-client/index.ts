@@ -1411,6 +1411,10 @@ async function beginPrintRequest(tiNo: string, itemCode: string): Promise<BeginP
   });
 }
 
+async function cancelPrintRequest(tiNo: string): Promise<{ cancelled: number }> {
+  return rpc<{ cancelled: number }>("cancel_print", { p_ti_no: tiNo });
+}
+
 async function unlockTiLabelsRequest(
   tiNo: string,
   newQty?: number | null
@@ -2128,6 +2132,25 @@ export function useBeginPrint() {
       queryClient.invalidateQueries({ queryKey: ["ti-label-status", tiNo] });
       queryClient.invalidateQueries({ queryKey: getGetTiRecordQueryKey(tiNo) });
       queryClient.invalidateQueries({ queryKey: ["ti-records"] });
+    },
+  });
+}
+
+// Release the caller's own open print session for a TI (or, for an admin, any
+// open session), so a print abandoned without printing can be reopened without
+// waiting out the agent's no-print timeout. Backs the "release & reopen" path
+// when Print reports a session already in progress.
+export function useCancelPrint() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ tiNo }: { tiNo: string }) => {
+      if (!isSupabaseConfigured) {
+        throw new Error("Label printing requires the online (Supabase) database.");
+      }
+      return cancelPrintRequest(tiNo);
+    },
+    onSuccess: (_result, { tiNo }) => {
+      queryClient.invalidateQueries({ queryKey: ["ti-label-status", tiNo] });
     },
   });
 }
