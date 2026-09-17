@@ -4,6 +4,7 @@ import type { TiRecordInput } from "@/api-client";
 import {
   useTiLabelStatus,
   useBeginPrint,
+  useCancelPrint,
   useUnlockTiLabels,
   useEnqueuePrintJob,
   useSavedLabelExists,
@@ -68,6 +69,7 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
   const labelStatus = useTiLabelStatus(tiNo, { query: { enabled: open && !!tiNo } });
   const savedExists = useSavedLabelExists(itemCode, { query: { enabled: open && !!itemCode } });
   const beginPrint = useBeginPrint();
+  const cancelPrint = useCancelPrint();
   const unlockLabels = useUnlockTiLabels();
   const enqueueJob = useEnqueuePrintJob();
   const requestUnlock = useRequestUnlock();
@@ -188,17 +190,43 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
       // begin_print opens a print session (fixes the starting serial + queues the
       // job). The agent opens the label in BarTender; the operator prints, and the
       // ACTUAL number of labels the printer produced is read back and counted here.
-      const result = await beginPrint.mutateAsync({ tiNo, itemCode });
-      toast({
-        title: "Label sent to BarTender",
-        description: `Starts at serial ${result.serial_start}. Print up to ${result.remaining}. The actual printed count updates here automatically.`,
-      });
-      await labelStatus.refetch();
+      await startPrintSession();
     } catch (error) {
-      toast({ variant: "destructive", title: "Could not start printing", description: getErrorMessage(error) });
+      const message = getErrorMessage(error);
+      // Shop-floor recovery: an operator can open a print and close BarTender
+      // without printing, which leaves the session "in progress" and blocks the
+      // next Print. Offer to release that open session and reopen a fresh print.
+      if (/already in progress/i.test(message)) {
+        const reopen = window.confirm(
+          "A print for this TI is still open on the print PC.\n\n" +
+            "• If you already printed some labels, click Cancel and let the count finish first.\n" +
+            "• If you closed BarTender without printing, click OK to release it and open a fresh print.",
+        );
+        if (reopen) {
+          try {
+            await cancelPrint.mutateAsync({ tiNo });
+            await startPrintSession();
+          } catch (retryError) {
+            toast({ variant: "destructive", title: "Could not reopen print", description: getErrorMessage(retryError) });
+          }
+        }
+      } else {
+        toast({ variant: "destructive", title: "Could not start printing", description: message });
+      }
     } finally {
       setBusy(null);
     }
+  };
+
+  // Queue one print session and confirm it to the operator. Shared by the first
+  // Print click and the "release & reopen" recovery path above.
+  const startPrintSession = async () => {
+    const result = await beginPrint.mutateAsync({ tiNo, itemCode });
+    toast({
+      title: "Label sent to BarTender",
+      description: `Starts at serial ${result.serial_start}. Print up to ${result.remaining}. The actual printed count updates here automatically.`,
+    });
+    await labelStatus.refetch();
   };
 
   const handleUnlock = async () => {
@@ -206,7 +234,7 @@ export function TiLabelEditorDialog({ open, onOpenChange, data }: TiLabelEditorD
     setBusy("unlock");
     try {
       await unlockLabels.mutateAsync({ tiNo });
-      toast({ title: "Labels unlocked", description: "This TI can print labels again." });
+      toast({ title: "Labels unlocked", description: "Printed count reset to 0 — labels reprint from the first serial." });
       await labelStatus.refetch();
     } catch (error) {
       toast({ variant: "destructive", title: "Unlock failed", description: getErrorMessage(error) });

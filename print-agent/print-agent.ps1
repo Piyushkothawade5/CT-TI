@@ -250,14 +250,18 @@ function Enable-PrinterRetention {
 # TotalPages includes the driver's phantom leading page, so printPageOffset is subtracted
 # once per our spool job.
 function Get-ManualPrintCount {
-  param([string]$Printer, [string]$DocToken, [string]$ItemToken)
+  param([string]$Printer, [string]$DocToken, [string]$ItemToken, [string]$JobId)
   $seen = @{}              # spool jobId -> pages, OURS only
   $started = Get-Date
   $lastGrowth = $null
   $ourPages = 0
   $maxSeconds = 900        # hard cap on the whole session
   $quietSeconds = 12       # finalize this long after OUR job's pages stop growing
-  $noPrintGiveup = 360     # give up if OUR job never appears (operator didn't print)
+  $noPrintGiveup = 360     # backstop: give up if OUR job never appears (operator didn't print)
+  $btGraceUntil = (Get-Date).AddSeconds(20)  # let BarTender launch before trusting "closed"
+  $btSeenRunning = $false
+  $lastStatusCheck = Get-Date
+  $externallyEnded = $false                  # session cancelled/finished from the webapp
   while (((Get-Date) - $started).TotalSeconds -lt $maxSeconds) {
     Start-Sleep -Milliseconds 400
     try {
@@ -274,12 +278,45 @@ function Get-ManualPrintCount {
     $now = 0; foreach ($v in $seen.Values) { $now += $v }
     if ($now -gt $ourPages) { $ourPages = $now; $lastGrowth = Get-Date }
     if ($ourPages -gt 0 -and $lastGrowth -and ((Get-Date) - $lastGrowth).TotalSeconds -gt $quietSeconds) { break }  # ours printed, then stable
-    if ($ourPages -eq 0 -and ((Get-Date) - $started).TotalSeconds -gt $noPrintGiveup) { break }                     # ours never printed
+
+    # Operator closed BarTender WITHOUT printing anything -> end now instead of
+    # waiting out $noPrintGiveup, so the TI's in-progress lock frees in seconds.
+    # A launch grace period first, so we don't mistake the pre-launch moment for a
+    # close. (If other labels are kept open the process stays alive; the webapp
+    # 'cancel_print' status-poll below covers that case.)
+    if ($ourPages -eq 0) {
+      if (Test-BarTenderRunning) { $btSeenRunning = $true }
+      elseif ($btSeenRunning -and (Get-Date) -gt $btGraceUntil) {
+        Write-Host "[print]   BarTender closed with nothing printed - releasing session"
+        break
+      }
+    }
+
+    # The operator (or an admin) can cancel this session from the webapp
+    # (cancel_print sets the job's status away from 'opened'). Poll the job's own
+    # status every few seconds; if it is no longer 'opened', stop watching so the
+    # agent frees up and can pick up the next print immediately. Return -1 to say
+    # "already in a terminal state" so the caller does NOT overwrite it.
+    if ($JobId -and ((Get-Date) - $lastStatusCheck).TotalSeconds -ge 3) {
+      $lastStatusCheck = Get-Date
+      try {
+        $row = @(Invoke-Rest -Method Get -Path "ct_print_jobs?id=eq.$JobId&select=status")
+        $st = if ($row.Count -ge 1) { [string]$row[0].status } else { $null }
+        if ($st -and $st -ne 'opened') {
+          Write-Host "[print]   session no longer open (status=$st) - stopping watch"
+          $externallyEnded = $true
+          break
+        }
+      } catch {}
+    }
+
+    if ($ourPages -eq 0 -and ((Get-Date) - $started).TotalSeconds -gt $noPrintGiveup) { break }  # ours never printed
   }
   # Delete our own retained spool job(s) so the shared queue does not fill up.
   foreach ($id in @($seen.Keys)) {
     try { Remove-PrintJob -PrinterName $Printer -ID ([int]$id) -ErrorAction SilentlyContinue } catch {}
   }
+  if ($externallyEnded) { return -1 }                        # caller must not overwrite a cancelled/finished job
   $total = $ourPages - ($script:PageOffset * $seen.Count)     # phantom page per our spool job
   if ($total -lt 0) { $total = 0 }
   return $total
@@ -365,11 +402,16 @@ function Invoke-PrintJob {
     Open-InBarTender $work
     Set-JobStatus -Id $Job.id -Status "opened"
     Write-Host "[print] $($Job.item_code) opened in BarTender (start=$start) - watching '$($cfg.printerName)' for actual count..."
-    $actual = Get-ManualPrintCount $cfg.printerName ([IO.Path]::GetFileNameWithoutExtension($work)) $safe
+    $actual = Get-ManualPrintCount $cfg.printerName ([IO.Path]::GetFileNameWithoutExtension($work)) $safe $Job.id
     Remove-Item $work -Force -ErrorAction SilentlyContinue
   }
 
-  if ($actual -gt 0) {
+  if ($actual -lt 0) {
+    # The session was cancelled/finished from the webapp while we watched; the job
+    # already sits in a terminal state. Don't overwrite it (avoids recording a
+    # count against a cancelled session and any resulting serial drift).
+    Write-Host "[print] $($Job.item_code) - session cancelled/closed elsewhere; leaving job as-is"
+  } elseif ($actual -gt 0) {
     Set-JobResult -Id $Job.id -Count $actual -Status "done"
     Write-Host "[print] $($Job.item_code) DONE - $actual label(s) actually printed (start=$start)"
   } else {
@@ -386,16 +428,18 @@ function Remove-StaleTempFiles {
     ForEach-Object { try { Remove-Item $_.FullName -Force } catch {} }
 }
 
-# A print session left 'opened' can only be a leftover from a previous agent run
-# (this is the single print PC). Clear them so begin_print's in-progress guard
-# doesn't block the TI forever. The count for those sessions is unknown -> operator
-# reprints if needed; admin can unlock.
+# A print session left 'opened' OR 'pending' at startup can only be a leftover
+# from a previous agent run (this is the single print PC). Clear BOTH so
+# begin_print's in-progress guard doesn't block the TI forever. Clearing 'pending'
+# matters: a pending job that survives a restart is picked up and re-opened,
+# which silently re-locks the TI right after start-up. The count for these
+# sessions is unknown -> operator reprints if needed; admin can unlock.
 function Clear-StaleOpenJobs {
   try {
-    $stale = Invoke-Rest -Method Get -Path "ct_print_jobs?action=eq.print&status=eq.opened&select=id"
+    $stale = Invoke-Rest -Method Get -Path "ct_print_jobs?action=eq.print&status=in.(opened,pending)&select=id,status"
     foreach ($j in $stale) {
-      Set-JobStatus -Id $j.id -Status "error" -ErrorText "Agent restarted while this print session was open; printed count was not recorded. Reprint if needed."
-      Write-Host "[startup] cleared stale open print session $($j.id)"
+      Set-JobStatus -Id $j.id -Status "error" -ErrorText "Agent restarted before this print finished; printed count was not recorded. Reprint if needed."
+      Write-Host "[startup] cleared stale $($j.status) print session $($j.id)"
     }
   } catch { Write-Warning "stale-job cleanup failed: $($_.Exception.Message)" }
 }

@@ -38,7 +38,11 @@ export function UnlockRequestsDialog({
       await resolveRequest.mutateAsync({ id: request.id });
       toast({
         title: "Unlocked",
-        description: `${request.ti_no} — ${request.request_type === "ti" ? "TI reopened" : "labels unlocked"}.`,
+        description: `${request.ti_no} — ${
+          request.request_type === "ti"
+            ? "TI reopened (must be checked again)"
+            : "labels reset to 0 — reprint from the first serial"
+        }.`,
       });
     } catch (error) {
       toast({ variant: "destructive", title: "Unlock failed", description: String(error) });
