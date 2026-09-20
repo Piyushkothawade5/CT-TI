@@ -207,7 +207,7 @@ function buildCoreTapRows(core: CoreData, coreNumber: number, fallbackRatio?: st
   const ratioParts = parseRatio(ratio);
   const burden = normalizeBurden(core.burden_va);
   const extraSpecs = getTapExtraSpecs(core);
-  const tapValues = getTapTurnValues(core, ratioParts);
+  const tapValues = getTapTurnValues(ratioParts);
   const terminalPairs = getTapTerminalPairs(core, tapValues.length, coreNumber);
 
   if (tapValues.length && ratioParts.secondary) {
@@ -250,39 +250,17 @@ function formatTapSpec(label: string, value?: string): string {
   return text ? `${label} : ${text}` : "";
 }
 
-function getTapTurnValues(core: CoreData, ratioParts: ParsedRatio): number[] {
-  const totalTurns = parseNumber(core.sec_total_turns);
-  const segmentTurns = [
-    core.sec_turns_s1s2,
-    core.sec_turns_s2s3,
-    core.sec_turns_s3s4,
-    core.sec_turns_s4s5,
-  ].map(parseNumber).filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
-  const ratioTurnValues = ratioParts.primaryValues.length > 1
-    ? [...ratioParts.primaryValues].sort((a, b) => a - b).slice(0, MAX_TAPS_PER_CORE)
-    : [];
-  const terminalTapCount = Math.max(getTerminalNames(core, 0, 1).length - 1, 0);
-  const tapCount = Math.min(
-    Math.max(terminalTapCount, segmentTurns.length, ratioTurnValues.length, totalTurns ? 1 : 0),
-    MAX_TAPS_PER_CORE
+// The label ratio numerator is always the PRIMARY CURRENT of each tap, taken
+// straight from the ratio (e.g. "200-100/5A" -> 100/5A and 200/5A). Every tap's
+// primary is enumerated in the ratio, so we never derive it from the secondary
+// winding turns (which would wrongly print turns/secondary, e.g. 20/5A, 40/5A).
+function getTapTurnValues(ratioParts: ParsedRatio): number[] {
+  const primaries = ratioParts.primaryValues.filter(
+    (value): value is number => Number.isFinite(value) && value > 0
   );
-
-  if (tapCount <= 0) return ratioParts.primaryValues.slice(0, 1);
-
-  // When the ratio itself enumerates the tap primaries (e.g. "200-100/5A"), the
-  // label ratio numerator must be those primary currents (100, then 200) — never
-  // the secondary turns, which would wrongly divide by the secondary current.
-  if (ratioTurnValues.length >= tapCount) {
-    return ratioTurnValues.slice(0, tapCount);
-  }
-
-  let cumulativeTurns = 0;
-  return Array.from({ length: tapCount }, (_, index) => {
-    cumulativeTurns += segmentTurns[index] || 0;
-    if (tapCount === 1) return totalTurns || cumulativeTurns || segmentTurns[0] || ratioTurnValues[0];
-    if (index === tapCount - 1 && totalTurns) return totalTurns;
-    return cumulativeTurns || ratioTurnValues[index] || totalTurns || segmentTurns[index];
-  }).filter((value): value is number => Number.isFinite(value) && value > 0);
+  if (primaries.length <= 1) return primaries.slice(0, 1);
+  // Multi-ratio CT: one tap per primary current, ascending.
+  return [...primaries].sort((a, b) => a - b).slice(0, MAX_TAPS_PER_CORE);
 }
 
 type ParsedRatio = {
