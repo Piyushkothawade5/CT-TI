@@ -21,6 +21,9 @@ const CT_TYPE_SERIAL_CODES: Record<string, string> = {
   "RESIN CAST CT": "RCC",
   "RESIN CASTCT": "RCC",
   "RESIN INSULATED CT": "RCC",
+  "RESIN CAST VT": "RVT",
+  "RESIN CASTVT": "RVT",
+  "RESIN INSULATED VT": "RVT",
   "TAPE INSULATED CT": "TPC",
   "TAPE WOUND CT": "TPC",
   "TAPE WOUNDC CT": "TPC",
@@ -53,6 +56,9 @@ export function getWorkOrderSerialCtCode(ctType?: string | null): string {
   if (!normalized) return "";
 
   if (CT_TYPE_SERIAL_CODES[normalized]) return CT_TYPE_SERIAL_CODES[normalized];
+  // Resin voltage transformers use RVT; keep this before the RCC fallback so a
+  // "RESIN CAST VT" is not mistaken for a resin cast CT.
+  if (normalized.includes("RESIN") && /\bVT\b/.test(normalized)) return "RVT";
   if (normalized.includes("RESIN CAST")) return "RCC";
   if (normalized.includes("PLASTIC CASE") || normalized.includes("PLASIC CASE")) return "PCT";
   if (
