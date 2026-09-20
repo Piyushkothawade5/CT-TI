@@ -13,7 +13,7 @@ import { DrawingFieldExtractor } from "@/components/ti-form/DrawingFieldExtracto
 import { parseDrawingItemFields } from "@/lib/drawing-field-parser";
 import { uploadDrawingFile } from "@/lib/drawing-upload";
 import { normalizeItemTiFormat, type ItemTiFormat } from "@/lib/item-ti-compatibility";
-import { FileUp, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { FileUp, PanelRightClose, PanelRightOpen, Trash2 } from "lucide-react";
 
 const CORE_FIELDS = [
   { label: "RATIO",                  key: "ratio" },
@@ -100,6 +100,9 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
         setIsUploadingDrawing(true);
         const uploadResult = await uploadDrawingFile(drawingFile, cleanedItemNo);
         payload = { ...payload, ...uploadResult };
+      } else if (removeDrawing) {
+        // Clear the stored drawing reference (empty strings are sent in the PATCH).
+        payload = { ...payload, drawing_url: "", drawing_file_name: "", drawing_content_type: "" };
       }
       if (isEditMode) {
         savedItem = await updateItemMutation.mutateAsync({ itemNo: cleanedItemNo, data: payload });
@@ -135,11 +138,13 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
   const lastCoreColumnRef = React.useRef("2");
   const drawingInputRef = React.useRef<HTMLInputElement>(null);
   const [drawingFile, setDrawingFile] = React.useState<File | null>(null);
+  const [removeDrawing, setRemoveDrawing] = React.useState(false);
   const [isDrawingPanelOpen, setIsDrawingPanelOpen] = React.useState(false);
   const [activeField, setActiveField] = React.useState<{ name: string; label: string } | null>(null);
   React.useEffect(() => {
     if (open) {
       setDrawingFile(null);
+      setRemoveDrawing(false);
       setIsDrawingPanelOpen(false);
     }
   }, [cleanedItemNo, isEditMode, open]);
@@ -317,16 +322,33 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
                   const file = event.target.files?.[0];
                   if (file) {
                     setDrawingFile(file);
+                    setRemoveDrawing(false);
                     if (!isEditMode) setIsDrawingPanelOpen(true);
                   }
                   event.target.value = "";
                 }}
               />
               <div className="flex flex-col items-end gap-1">
-                <Button type="button" variant="outline" onClick={() => drawingInputRef.current?.click()} className="border-[#4a6fa5] text-[#2a4080]">
-                  <FileUp className="w-4 h-4 mr-2" /> {drawingFile ? "Change Drawing" : isEditMode && itemData?.drawing_url ? "Change Drawing" : "Attach Drawing"}
-                </Button>
-                {isEditMode && (drawingFile || itemData?.drawing_file_name || itemData?.drawing_url) && (
+                <div className="flex items-center gap-2">
+                  <Button type="button" variant="outline" onClick={() => drawingInputRef.current?.click()} className="border-[#4a6fa5] text-[#2a4080]">
+                    <FileUp className="w-4 h-4 mr-2" /> {drawingFile ? "Change Drawing" : isEditMode && itemData?.drawing_url && !removeDrawing ? "Change Drawing" : "Attach Drawing"}
+                  </Button>
+                  {isEditMode && !drawingFile && !removeDrawing && (itemData?.drawing_url || itemData?.drawing_file_name) && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setRemoveDrawing(true)}
+                      className="border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700"
+                      title="Remove the drawing from this item"
+                    >
+                      <Trash2 className="w-4 h-4 mr-2" /> Remove Drawing
+                    </Button>
+                  )}
+                </div>
+                {isEditMode && removeDrawing && (
+                  <span className="text-xs text-red-600">Drawing will be removed on save</span>
+                )}
+                {isEditMode && !removeDrawing && (drawingFile || itemData?.drawing_file_name || itemData?.drawing_url) && (
                   <span className="max-w-56 truncate text-xs text-gray-500" title={drawingFile?.name || itemData?.drawing_file_name || itemData?.drawing_url || ""}>
                     {drawingFile ? drawingFile.name : itemData?.drawing_file_name || "Drawing saved"}
                   </span>
