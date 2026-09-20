@@ -635,6 +635,7 @@ export default function WorkOrder({
                           ? nextWorkOrderNumber
                           : undefined
                       }
+                      formatValue={field.name === "work_order" ? expandWorkOrderNumberInput : undefined}
                       onChange={(value) => updateField(field.name, value)}
                     />
                   ))}
@@ -739,6 +740,7 @@ function WorkOrderField({
   suggestions,
   suggestionMode = "none",
   placeholder,
+  formatValue,
 }: {
   fieldName: keyof WorkOrderFormData;
   label: string;
@@ -750,6 +752,7 @@ function WorkOrderField({
   suggestions?: string[];
   suggestionMode?: "none" | "autocomplete" | "suggestion";
   placeholder?: string;
+  formatValue?: (value: string) => string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState(value);
@@ -809,7 +812,13 @@ function WorkOrderField({
           if (suggestionMode === "autocomplete") setOpen(true);
           else if (suggestionMode === "suggestion" && value.trim().length >= 3) setOpen(true);
         }}
-        onBlur={() => setTimeout(() => setOpen(false), 100)}
+        onBlur={() => {
+          setTimeout(() => setOpen(false), 100);
+          if (formatValue) {
+            const formatted = formatValue(value);
+            if (formatted !== value) onChange(formatted);
+          }
+        }}
         onKeyDown={(event) => {
           if (disabled || !filteredSuggestions.length) return;
           if (event.key === "ArrowDown") {
@@ -1170,6 +1179,15 @@ function compareWorkOrderRecordsByTiNo(a: WorkOrderRecord, b: WorkOrderRecord): 
     return aTi ? -1 : 1;
   }
   return (a.created_at || "").localeCompare(b.created_at || "");
+}
+
+// Expand a bare serial the user typed (e.g. "374") into the full work order
+// number CT-PT/374/<current fiscal year>. Anything that is not purely digits is
+// left untouched, so a already-complete number typed by hand is preserved.
+function expandWorkOrderNumberInput(value: string, date = new Date()): string {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return trimmed;
+  return `CT-PT/${trimmed}/${getFiscalYearLabel(date)}`;
 }
 
 // Fiscal year label (1 Apr – 31 Mar), e.g. 2026-09 -> "26-27", 2027-02 -> "26-27".
