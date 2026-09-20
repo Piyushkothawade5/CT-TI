@@ -944,9 +944,9 @@ async function findSupabaseTiRecord(tiNo: string): Promise<TiRecord> {
 
 async function listSupabaseTiRecords(filters: ListFilters = {}): Promise<TiRecord[]> {
   const records = await supabaseFetch<TiRecord[]>(buildTiRecordsPath(filters));
-  // Ascending TI-number order (e.g. LTCT-26-27-001, -002, -003) so every list
-  // built on this — including the approval/pending search — reads sequentially.
-  return records.sort((a, b) => compareTiNumbers(a, b));
+  // Descending TI-number order (newest first) for the TI search modal, which
+  // renders this list directly. The home/viewer screens re-sort ascending.
+  return records.sort((a, b) => compareTiNumbers(b, a));
 }
 
 async function listSupabaseWorkOrders(): Promise<WorkOrderRecord[]> {
@@ -1709,7 +1709,7 @@ export function useListTiRecords(
     queryFn: async () => {
       const records = isSupabaseConfigured
         ? await listSupabaseTiRecords(filters)
-        : filterTiRecords(getTiRecords(), filters).sort((a, b) => compareTiNumbers(a, b));
+        : filterTiRecords(getTiRecords(), filters).sort((a, b) => compareTiNumbers(b, a));
       return { records };
     },
     enabled: options?.query?.enabled !== false,
