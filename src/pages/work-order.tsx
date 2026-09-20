@@ -629,7 +629,7 @@ export default function WorkOrder({
                       }
                       placeholder={
                         field.name === "work_order" && nextWorkOrderNumber
-                          ? `Next: ${nextWorkOrderNumber}`
+                          ? nextWorkOrderNumber
                           : undefined
                       }
                       onChange={(value) => updateField(field.name, value)}
