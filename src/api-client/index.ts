@@ -1062,9 +1062,11 @@ function normalizeItemPatch(data: Partial<ItemInput>): Partial<ItemInput> {
   if (patch.ti_format !== undefined) patch.ti_format = patch.ti_format === "non_standard" ? "non_standard" : "standard";
   if (patch.ct_type !== undefined) patch.ct_type = normalizeCtType(patch.ct_type);
   if (patch.default_customer !== undefined) patch.default_customer = normalizeCustomer(patch.default_customer);
-  if (patch.drawing_url !== undefined) patch.drawing_url = normalizeText(patch.drawing_url);
-  if (patch.drawing_file_name !== undefined) patch.drawing_file_name = normalizeText(patch.drawing_file_name);
-  if (patch.drawing_content_type !== undefined) patch.drawing_content_type = normalizeText(patch.drawing_content_type);
+  // Coalesce to "" (not undefined) so an explicit clear is sent in the PATCH and
+  // actually removes the stored drawing, rather than being dropped by JSON.stringify.
+  if (patch.drawing_url !== undefined) patch.drawing_url = normalizeText(patch.drawing_url) ?? "";
+  if (patch.drawing_file_name !== undefined) patch.drawing_file_name = normalizeText(patch.drawing_file_name) ?? "";
+  if (patch.drawing_content_type !== undefined) patch.drawing_content_type = normalizeText(patch.drawing_content_type) ?? "";
   if (patch.core1 !== undefined) patch.core1 = normalizeCore(patch.core1);
   if (patch.core2 !== undefined) patch.core2 = normalizeCore(patch.core2);
   if (patch.core3 !== undefined) patch.core3 = normalizeCore(patch.core3);
