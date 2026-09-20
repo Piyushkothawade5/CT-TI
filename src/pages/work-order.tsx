@@ -966,7 +966,6 @@ const CORE_TUPLE_FIELDS: Array<{ label: string; key: string }> = [
 
 // Any of these carrying a value means the core has data worth showing.
 const CORE_DATA_KEYS = [
-  "ratio",
   ...CORE_TUPLE_FIELDS.map((field) => field.key),
   "sec_connection",
   "wire_length",
@@ -982,8 +981,9 @@ function buildSpecificationFromItemMaster(item?: Partial<ItemInput> | null) {
     if (cleaned) parts.push(`${label} : ${cleaned}`);
   };
 
-  // CT Type first.
+  // CT Type first, then the single item-level Ratio (shared by all cores).
   pushField("CT Type", item.ct_type);
+  pushField("Ratio", item.ratio);
 
   // Cores that actually carry particulars, keeping their Core-N position.
   const activeCores = [item.core1, item.core2, item.core3]
@@ -992,24 +992,9 @@ function buildSpecificationFromItemMaster(item?: Partial<ItemInput> | null) {
       Boolean(entry.core) && CORE_DATA_KEYS.some((key) => cleanSpecificationValue(entry.core?.[key]))
     );
 
-  // Ratio: shared line when every core matches (after cleaning); otherwise
-  // it moves into each core tuple. Falls back to the item-level ratio.
-  const coreRatios = activeCores
-    .map(({ core }) => cleanSpecificationValue(core.ratio))
-    .filter(Boolean);
-  const uniqueRatios = distinctSpecificationValues(coreRatios);
-  const ratioPerCore = uniqueRatios.length > 1;
-  if (!ratioPerCore) {
-    pushField("Ratio", uniqueRatios[0] || item.ratio);
-  }
-
   // Core tuples — Core-1, then Core-2, then Core-3.
   activeCores.forEach(({ core, index }) => {
     const coreParts: string[] = [];
-    if (ratioPerCore) {
-      const ratio = cleanSpecificationValue(core.ratio);
-      if (ratio) coreParts.push(`Ratio : ${ratio}`);
-    }
     for (const { label, key } of CORE_TUPLE_FIELDS) {
       const cleaned = cleanSpecificationValue(core[key]);
       if (!cleaned) continue;
@@ -1036,9 +1021,8 @@ function buildSpecificationFromItemMaster(item?: Partial<ItemInput> | null) {
 
   // Remaining item-level fields.
   pushField("Sec. Terminal", item.sec_terminal);
-  // CT Final Dim (ID/OD/H) is used exactly as stored — no parsing.
-  const dimensions = cleanSpecificationValue(item.ct_final_dim);
-  if (dimensions) parts.push(dimensions);
+  // Dimensions come from CT Final Dim, used exactly as stored — no parsing.
+  pushField("Dimensions", item.ct_final_dim);
   pushField("Ref Std", item.ref_std);
   pushField("INS Class", item.ins_class);
   pushField("GA Drg", item.ga_drg);
