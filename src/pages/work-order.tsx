@@ -25,7 +25,6 @@ import {
   useTiLabelStatus,
   useUpdateWorkOrder,
   TI_SOURCE_WORK_ORDER_FIELDS,
-  type CoreData,
   type ItemInput,
   type UserProfile,
 } from "@/api-client";
@@ -952,33 +951,63 @@ function cleanMasterItemCode(value: string) {
   return value.replace(/[\s,\.]+/g, "").replace(/[^0-9]/g, "");
 }
 
+// Per-core specification fields (from core particulars), in display order.
+const CORE_SPECIFICATION_FIELDS: Array<{ label: string; key: string }> = [
+  { label: "RATIO", key: "ratio" },
+  { label: "Burden (VA)", key: "burden_va" },
+  { label: "Accuracy Class", key: "accuracy_class" },
+  { label: "ISF", key: "isf" },
+  { label: "Min. Knee pt. volt.", key: "min_knee_pt_volt" },
+  { label: "Max. Rct @ 75°c", key: "max_rct_75c" },
+  { label: "Max. Exc. C/n", key: "max_exc_vk2" },
+  { label: "Sec Connection", key: "sec_connection" },
+  { label: "Wire Length", key: "wire_length" },
+  { label: "Wire Colour", key: "wire_colour" },
+];
+
 function buildSpecificationFromItemMaster(item?: Partial<ItemInput> | null) {
   if (!item) return "";
 
-  const ctType = cleanSpecificationValue(item.ct_type);
-  const ratio = cleanSpecificationValue(item.ratio);
-  const accuracyClass = cleanSpecificationValue(findPrimaryAccuracyClass(item));
-  const bil = cleanSpecificationValue(item.insulation_level);
-  const frequency = cleanSpecificationValue(item.frequency);
-  const refStd = cleanSpecificationValue(item.ref_std);
-  const gaDrg = cleanSpecificationValue(item.ga_drg);
-  const dimensions = parseSpecificationDimensions(item.ct_final_dim);
+  const parts: string[] = [];
+  const pushField = (label: string, value?: string | null) => {
+    const cleaned = cleanSpecificationValue(value);
+    if (cleaned) parts.push(`${label} : ${cleaned}`);
+  };
 
-  const parts = [
-    `CT Type : ${ctType || "-"}`,
-    `Ratio : ${ratio || "-"}`,
-    `Class : ${accuracyClass || "-"}`,
-    `BIL : ${bil || "-"}`,
-    `Frequency : ${frequency || "-"}`,
-    `Ref Std : ${refStd || "-"}`,
-    `ID : ${dimensions.id ? `${dimensions.id} mm` : "-"}`,
-    `OD : ${dimensions.od ? `${dimensions.od} mm` : "-"}`,
-    dimensions.h
-      ? `H : ${dimensions.h} mm${gaDrg ? ` to Drg ${gaDrg}` : ""}`
-      : `H : -${gaDrg ? ` to Drg ${gaDrg}` : ""}`,
-  ];
+  // Item-level fields — appear once, never repeated per core.
+  pushField("CT Type", item.ct_type);
+  pushField("BIL", item.insulation_level);
+  pushField("Frequency", item.frequency);
+  pushField("STC", item.stc);
+  pushField("Sec. Terminal", item.sec_terminal);
+  pushField("INS Class", item.ins_class);
+  pushField("Ref Std", item.ref_std);
+
+  // CT Final Dim (ID/OD/H) is used exactly as stored — no parsing.
+  const dimensions = cleanSpecificationValue(item.ct_final_dim);
+  if (dimensions) parts.push(dimensions);
+
+  // Core particulars — Core-1 first, then Core-2, then Core-3.
+  [item.core1, item.core2, item.core3].forEach((core, index) => {
+    if (!core) return;
+    const coreParts: string[] = [];
+    for (const { label, key } of CORE_SPECIFICATION_FIELDS) {
+      const cleaned = cleanSpecificationValue(core[key]);
+      if (!cleaned) continue;
+      const value =
+        key === "max_exc_vk2" && isCheckedSpecificationValue(core.max_exc_is_vk2)
+          ? `${cleaned} @VK/2`
+          : cleaned;
+      coreParts.push(`${label} : ${value}`);
+    }
+    if (coreParts.length) parts.push(`Core-${index + 1} : ${coreParts.join(", ")}`);
+  });
 
   return parts.join(", ");
+}
+
+function isCheckedSpecificationValue(value: unknown): boolean {
+  return value === true || value === "true";
 }
 
 function getLatestWorkOrderSpecificationForItem(
@@ -997,58 +1026,6 @@ function getLatestWorkOrderSpecificationForItem(
     .sort((a, b) =>
       (b.updated_at || b.created_at || "").localeCompare(a.updated_at || a.created_at || "")
     )[0]?.specification?.trim() || "";
-}
-
-function findPrimaryAccuracyClass(item: Partial<ItemInput>) {
-  const cores = [item.core1, item.core2, item.core3] as Array<CoreData | undefined>;
-  return cores.map((core) => core?.accuracy_class?.trim() || "").find(Boolean) || "";
-}
-
-function parseSpecificationDimensions(value?: string | null) {
-  const raw = cleanSpecificationValue(value);
-  if (!raw) return { id: "", od: "", h: "" };
-
-  const labelledId = extractLabelledDimension(raw, /\bID\s*[:=@]?\s*([0-9.\sXx*×]+)/i);
-  const labelledOd = extractLabelledDimension(raw, /\bOD\s*[:=@]?\s*([0-9.\sXx*×]+)/i);
-  const labelledH = extractLabelledDimension(raw, /\b(?:HT|HGT|HEIGHT|H)\s*[:=@]?\s*([0-9.\sXx*×]+)/i);
-  if (labelledId || labelledOd || labelledH) {
-    return { id: labelledId, od: labelledOd, h: labelledH };
-  }
-
-  const numbers = raw.match(/\d+(?:\.\d+)?/g) || [];
-  if (numbers.length === 3) {
-    return {
-      id: formatDimensionGroup(numbers.slice(0, 1)),
-      od: formatDimensionGroup(numbers.slice(1, 2)),
-      h: formatDimensionGroup(numbers.slice(2, 3)),
-    };
-  }
-  if (numbers.length >= 5) {
-    return {
-      id: formatDimensionGroup(numbers.slice(0, 2)),
-      od: formatDimensionGroup(numbers.slice(2, 4)),
-      h: formatDimensionGroup(numbers.slice(4, 5)),
-    };
-  }
-
-  return { id: "", od: "", h: "" };
-}
-
-function extractLabelledDimension(source: string, pattern: RegExp) {
-  const value = source.match(pattern)?.[1] || "";
-  if (!value) return "";
-  return formatDimensionGroup(value.match(/\d+(?:\.\d+)?/g) || []);
-}
-
-function formatDimensionGroup(values: string[]) {
-  return values.map((value) => formatDimensionValue(value)).filter(Boolean).join("X");
-}
-
-function formatDimensionValue(value?: string | null) {
-  const trimmed = cleanSpecificationValue(value);
-  if (!trimmed) return "";
-  const numeric = Number(trimmed);
-  return Number.isFinite(numeric) ? String(numeric) : trimmed;
 }
 
 function cleanSpecificationValue(value?: string | null) {
