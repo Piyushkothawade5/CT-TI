@@ -108,8 +108,11 @@ export default function WorkOrder({
   });
   const isSaving = createWorkOrderMutation.isPending || updateWorkOrderMutation.isPending;
 
+  // Order for Prev/Next navigation: by TI number sequence (e.g. LTCT-26-27-001,
+  // -002, -003, then next fiscal year), not by creation time. Records without a
+  // TI number fall to the end, ordered by creation time.
   const sortedRecords = useMemo(
-    () => [...records].sort((a, b) => a.created_at.localeCompare(b.created_at)),
+    () => [...records].sort(compareWorkOrderRecordsByTiNo),
     [records]
   );
   const distinctCustomers = useMemo(() => getDistinctWorkOrderValues(records, "customer"), [records]);
@@ -1152,6 +1155,21 @@ function getLatestWorkOrderOrderDetails(records: WorkOrderRecord[], workOrder?: 
     po_no: cleanWorkOrderValue(match.po_no),
     po_date: cleanWorkOrderValue(match.po_date),
   };
+}
+
+// Sequential order by TI number (LTCT-YY-YY-NNNN). numeric compare keeps the
+// serial in true numeric order; records without a TI number sort last, then by
+// creation time as a stable tie-breaker.
+function compareWorkOrderRecordsByTiNo(a: WorkOrderRecord, b: WorkOrderRecord): number {
+  const aTi = (a.ti_no || "").trim();
+  const bTi = (b.ti_no || "").trim();
+  if (aTi && bTi) {
+    const compared = aTi.localeCompare(bTi, undefined, { numeric: true, sensitivity: "base" });
+    if (compared !== 0) return compared;
+  } else if (aTi !== bTi) {
+    return aTi ? -1 : 1;
+  }
+  return (a.created_at || "").localeCompare(b.created_at || "");
 }
 
 // Fiscal year label (1 Apr – 31 Mar), e.g. 2026-09 -> "26-27", 2027-02 -> "26-27".
