@@ -25,6 +25,7 @@ import {
   useTiLabelStatus,
   useUpdateWorkOrder,
   TI_SOURCE_WORK_ORDER_FIELDS,
+  type CoreData,
   type ItemInput,
   type UserProfile,
 } from "@/api-client";
@@ -951,18 +952,25 @@ function cleanMasterItemCode(value: string) {
   return value.replace(/[\s,\.]+/g, "").replace(/[^0-9]/g, "");
 }
 
-// Per-core specification fields (from core particulars), in display order.
-const CORE_SPECIFICATION_FIELDS: Array<{ label: string; key: string }> = [
-  { label: "RATIO", key: "ratio" },
+// Per-core tuple fields (Burden through Max. Exc. C/n), in display order.
+// Ratio is handled separately (shared vs per-core), and sec connection /
+// wire length / wire colour are collapsed across cores after the tuples.
+const CORE_TUPLE_FIELDS: Array<{ label: string; key: string }> = [
   { label: "Burden (VA)", key: "burden_va" },
   { label: "Accuracy Class", key: "accuracy_class" },
   { label: "ISF", key: "isf" },
   { label: "Min. Knee pt. volt.", key: "min_knee_pt_volt" },
   { label: "Max. Rct @ 75°c", key: "max_rct_75c" },
   { label: "Max. Exc. C/n", key: "max_exc_vk2" },
-  { label: "Sec Connection", key: "sec_connection" },
-  { label: "Wire Length", key: "wire_length" },
-  { label: "Wire Colour", key: "wire_colour" },
+];
+
+// Any of these carrying a value means the core has data worth showing.
+const CORE_DATA_KEYS = [
+  "ratio",
+  ...CORE_TUPLE_FIELDS.map((field) => field.key),
+  "sec_connection",
+  "wire_length",
+  "wire_colour",
 ];
 
 function buildSpecificationFromItemMaster(item?: Partial<ItemInput> | null) {
@@ -974,24 +982,35 @@ function buildSpecificationFromItemMaster(item?: Partial<ItemInput> | null) {
     if (cleaned) parts.push(`${label} : ${cleaned}`);
   };
 
-  // Item-level fields — appear once, never repeated per core.
+  // CT Type first.
   pushField("CT Type", item.ct_type);
-  pushField("BIL", item.insulation_level);
-  pushField("Frequency", item.frequency);
-  pushField("STC", item.stc);
-  pushField("Sec. Terminal", item.sec_terminal);
-  pushField("INS Class", item.ins_class);
-  pushField("Ref Std", item.ref_std);
 
-  // CT Final Dim (ID/OD/H) is used exactly as stored — no parsing.
-  const dimensions = cleanSpecificationValue(item.ct_final_dim);
-  if (dimensions) parts.push(dimensions);
+  // Cores that actually carry particulars, keeping their Core-N position.
+  const activeCores = [item.core1, item.core2, item.core3]
+    .map((core, index) => ({ core, index }))
+    .filter((entry): entry is { core: CoreData; index: number } =>
+      Boolean(entry.core) && CORE_DATA_KEYS.some((key) => cleanSpecificationValue(entry.core?.[key]))
+    );
 
-  // Core particulars — Core-1 first, then Core-2, then Core-3.
-  [item.core1, item.core2, item.core3].forEach((core, index) => {
-    if (!core) return;
+  // Ratio: shared line when every core matches (after cleaning); otherwise
+  // it moves into each core tuple. Falls back to the item-level ratio.
+  const coreRatios = activeCores
+    .map(({ core }) => cleanSpecificationValue(core.ratio))
+    .filter(Boolean);
+  const uniqueRatios = distinctSpecificationValues(coreRatios);
+  const ratioPerCore = uniqueRatios.length > 1;
+  if (!ratioPerCore) {
+    pushField("Ratio", uniqueRatios[0] || item.ratio);
+  }
+
+  // Core tuples — Core-1, then Core-2, then Core-3.
+  activeCores.forEach(({ core, index }) => {
     const coreParts: string[] = [];
-    for (const { label, key } of CORE_SPECIFICATION_FIELDS) {
+    if (ratioPerCore) {
+      const ratio = cleanSpecificationValue(core.ratio);
+      if (ratio) coreParts.push(`Ratio : ${ratio}`);
+    }
+    for (const { label, key } of CORE_TUPLE_FIELDS) {
       const cleaned = cleanSpecificationValue(core[key]);
       if (!cleaned) continue;
       const value =
@@ -1003,7 +1022,57 @@ function buildSpecificationFromItemMaster(item?: Partial<ItemInput> | null) {
     if (coreParts.length) parts.push(`Core-${index + 1} : ${coreParts.join(", ")}`);
   });
 
+  // Common electrical fields.
+  pushField("BIL", item.insulation_level);
+  pushField("Frequency", item.frequency);
+  pushField("STC", item.stc);
+
+  // Sec Connection: single value if all cores match, else joined by " / ".
+  pushField("Sec Connection", combineCoreValues(activeCores, "sec_connection"));
+  // Wire Length: taken from Core-1 only.
+  pushField("Wire Length", item.core1?.wire_length);
+  // Wire Colour: single value if all cores match, else joined by " / ".
+  pushField("Wire Colour", combineCoreValues(activeCores, "wire_colour"));
+
+  // Remaining item-level fields.
+  pushField("Sec. Terminal", item.sec_terminal);
+  // CT Final Dim (ID/OD/H) is used exactly as stored — no parsing.
+  const dimensions = cleanSpecificationValue(item.ct_final_dim);
+  if (dimensions) parts.push(dimensions);
+  pushField("Ref Std", item.ref_std);
+  pushField("INS Class", item.ins_class);
+  pushField("GA Drg", item.ga_drg);
+
   return parts.join(", ");
+}
+
+// Collapse a core field across the active cores: one value when they all
+// match after cleaning (case-insensitive), otherwise the distinct values
+// joined by " / ". Returns the original (cleaned) text for display.
+function combineCoreValues(
+  activeCores: Array<{ core: CoreData; index: number }>,
+  key: string
+): string {
+  const values = activeCores
+    .map(({ core }) => cleanSpecificationValue(core[key]))
+    .filter(Boolean);
+  const distinct = distinctSpecificationValues(values);
+  if (!distinct.length) return "";
+  return distinct.length === 1 ? distinct[0] : distinct.join(" / ");
+}
+
+// De-duplicate cleaned values case-insensitively while keeping first-seen order
+// and original casing (so "RED" in one core and "Red" in another count as one).
+function distinctSpecificationValues(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const normalized = value.toLowerCase();
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(value);
+  }
+  return out;
 }
 
 function isCheckedSpecificationValue(value: unknown): boolean {
