@@ -115,6 +115,7 @@ export default function WorkOrder({
   const distinctCustomers = useMemo(() => getDistinctWorkOrderValues(records, "customer"), [records]);
   const distinctWorkOrders = useMemo(() => getDistinctWorkOrderValues(records, "work_order"), [records]);
   const distinctPoNos = useMemo(() => getDistinctWorkOrderValues(records, "po_no"), [records]);
+  const nextWorkOrderNumber = useMemo(() => getNextWorkOrderNumber(records), [records]);
 
   const currentIndex = currentRecordId
     ? sortedRecords.findIndex((record) => record.id === currentRecordId)
@@ -626,6 +627,11 @@ export default function WorkOrder({
                             ? "suggestion"
                             : "none"
                       }
+                      placeholder={
+                        field.name === "work_order" && nextWorkOrderNumber
+                          ? `Next: ${nextWorkOrderNumber}`
+                          : undefined
+                      }
                       onChange={(value) => updateField(field.name, value)}
                     />
                   ))}
@@ -729,6 +735,7 @@ function WorkOrderField({
   required,
   suggestions,
   suggestionMode = "none",
+  placeholder,
 }: {
   fieldName: keyof WorkOrderFormData;
   label: string;
@@ -739,6 +746,7 @@ function WorkOrderField({
   required?: boolean;
   suggestions?: string[];
   suggestionMode?: "none" | "autocomplete" | "suggestion";
+  placeholder?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState(value);
@@ -826,6 +834,7 @@ function WorkOrderField({
         }}
         disabled={disabled}
         autoComplete="off"
+        placeholder={placeholder}
         data-work-order-field
         data-work-order-name={fieldName}
         className="h-9 border-gray-300 bg-gray-50 focus-visible:ring-[#4a6fa5] disabled:bg-gray-50 disabled:text-gray-900"
@@ -1143,6 +1152,29 @@ function getLatestWorkOrderOrderDetails(records: WorkOrderRecord[], workOrder?: 
     po_no: cleanWorkOrderValue(match.po_no),
     po_date: cleanWorkOrderValue(match.po_date),
   };
+}
+
+// Fiscal year label (1 Apr – 31 Mar), e.g. 2026-09 -> "26-27", 2027-02 -> "26-27".
+function getFiscalYearLabel(date: Date): string {
+  const startYear = date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
+  const yy = (year: number) => String(year % 100).padStart(2, "0");
+  return `${yy(startYear)}-${yy(startYear + 1)}`;
+}
+
+// Suggested next work order number: CT-PT/<serial>/<fiscal year>. The serial
+// resets each fiscal year, so it is (max serial seen in the current fiscal year)
+// + 1, starting at 1 for the first work order of a new fiscal year.
+function getNextWorkOrderNumber(records: WorkOrderRecord[], date = new Date()): string {
+  const fiscalYear = getFiscalYearLabel(date);
+  let maxSerial = 0;
+  for (const record of records) {
+    const match = cleanWorkOrderValue(record.work_order).match(/^CT-PT\s*\/\s*(\d+)\s*\/\s*(.+)$/i);
+    if (!match) continue;
+    if (match[2].replace(/\s+/g, "") !== fiscalYear) continue;
+    const serial = Number(match[1]);
+    if (Number.isFinite(serial)) maxSerial = Math.max(maxSerial, serial);
+  }
+  return `CT-PT/${maxSerial + 1}/${fiscalYear}`;
 }
 
 function cleanSpecificationValue(value?: string | null) {
