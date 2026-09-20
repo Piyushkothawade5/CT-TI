@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useForm, Controller } from "react-hook-form";
-import { findHistoricalDrawingDimensions, useCreateItem, useDistinctCtTypes, useUpdateItem } from "@/api-client";
+import { findHistoricalDrawingDimensions, useClearItemDrawing, useCreateItem, useDistinctCtTypes, useUpdateItem } from "@/api-client";
 import type { CoreData, ItemInput } from "@/api-client";
 import { useToast } from "@/hooks/use-toast";
 import { calculateCoreFromDimensions, calculateTapTurns, expandRatioByCore, formatCoreWeight } from "@/lib/core-calculations";
@@ -56,6 +56,7 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
   const { toast } = useToast();
   const createItemMutation = useCreateItem();
   const updateItemMutation = useUpdateItem();
+  const clearItemDrawingMutation = useClearItemDrawing();
   const { data: distinctCtTypes = [] } = useDistinctCtTypes();
   const isEditMode = mode === "edit";
   const [isUploadingDrawing, setIsUploadingDrawing] = React.useState(false);
@@ -72,6 +73,12 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
 
   React.useEffect(() => {
     if (!open) return;
+    // An inline drawing removal updates the item cache; don't reset (and lose the
+    // user's other unsaved edits) just because the drawing fields changed.
+    if (skipNextResetRef.current) {
+      skipNextResetRef.current = false;
+      return;
+    }
     autoFilledValuesRef.current.clear();
     form.reset(
       isEditMode && itemData
@@ -100,9 +107,6 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
         setIsUploadingDrawing(true);
         const uploadResult = await uploadDrawingFile(drawingFile, cleanedItemNo);
         payload = { ...payload, ...uploadResult };
-      } else if (removeDrawing) {
-        // Clear the stored drawing reference (empty strings are sent in the PATCH).
-        payload = { ...payload, drawing_url: "", drawing_file_name: "", drawing_content_type: "" };
       }
       if (isEditMode) {
         savedItem = await updateItemMutation.mutateAsync({ itemNo: cleanedItemNo, data: payload });
@@ -138,16 +142,42 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
   const lastCoreColumnRef = React.useRef("2");
   const drawingInputRef = React.useRef<HTMLInputElement>(null);
   const [drawingFile, setDrawingFile] = React.useState<File | null>(null);
-  const [removeDrawing, setRemoveDrawing] = React.useState(false);
+  const [drawingCleared, setDrawingCleared] = React.useState(false);
   const [isDrawingPanelOpen, setIsDrawingPanelOpen] = React.useState(false);
   const [activeField, setActiveField] = React.useState<{ name: string; label: string } | null>(null);
+  // Skips the next form.reset after an inline drawing removal so the user's
+  // other unsaved edits are preserved when the item cache updates.
+  const skipNextResetRef = React.useRef(false);
   React.useEffect(() => {
     if (open) {
       setDrawingFile(null);
-      setRemoveDrawing(false);
+      setDrawingCleared(false);
+      skipNextResetRef.current = false;
       setIsDrawingPanelOpen(false);
     }
   }, [cleanedItemNo, isEditMode, open]);
+
+  const handleRemoveDrawing = async () => {
+    if (isSavingItem || clearItemDrawingMutation.isPending) return;
+    if (!window.confirm("Delete the uploaded drawing for this item? This cannot be undone.")) return;
+    try {
+      skipNextResetRef.current = true;
+      await clearItemDrawingMutation.mutateAsync(cleanedItemNo);
+      form.setValue("drawing_url", "");
+      form.setValue("drawing_file_name", "");
+      form.setValue("drawing_content_type", "");
+      setDrawingFile(null);
+      setDrawingCleared(true);
+      toast({ title: "Drawing removed", className: "bg-green-50 border-green-200 text-green-800" });
+    } catch (error) {
+      skipNextResetRef.current = false;
+      toast({
+        variant: "destructive",
+        title: "Failed to remove drawing",
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
   const handleDrawingAutoText = React.useCallback(async (text: string) => {
     if (isEditMode) return 0;
     const parsed = parseDrawingItemFields(text);
@@ -322,7 +352,7 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
                   const file = event.target.files?.[0];
                   if (file) {
                     setDrawingFile(file);
-                    setRemoveDrawing(false);
+                    setDrawingCleared(false);
                     if (!isEditMode) setIsDrawingPanelOpen(true);
                   }
                   event.target.value = "";
@@ -331,24 +361,25 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
               <div className="flex flex-col items-end gap-1">
                 <div className="flex items-center gap-2">
                   <Button type="button" variant="outline" onClick={() => drawingInputRef.current?.click()} className="border-[#4a6fa5] text-[#2a4080]">
-                    <FileUp className="w-4 h-4 mr-2" /> {drawingFile ? "Change Drawing" : isEditMode && itemData?.drawing_url && !removeDrawing ? "Change Drawing" : "Attach Drawing"}
+                    <FileUp className="w-4 h-4 mr-2" /> {drawingFile ? "Change Drawing" : isEditMode && itemData?.drawing_url && !drawingCleared ? "Change Drawing" : "Attach Drawing"}
                   </Button>
-                  {isEditMode && !drawingFile && !removeDrawing && (itemData?.drawing_url || itemData?.drawing_file_name) && (
+                  {isEditMode && !drawingFile && !drawingCleared && (itemData?.drawing_url || itemData?.drawing_file_name) && (
                     <Button
                       type="button"
                       variant="outline"
-                      onClick={() => setRemoveDrawing(true)}
+                      onClick={handleRemoveDrawing}
+                      disabled={clearItemDrawingMutation.isPending}
                       className="border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700"
-                      title="Remove the drawing from this item"
+                      title="Delete the drawing from this item"
                     >
-                      <Trash2 className="w-4 h-4 mr-2" /> Remove Drawing
+                      <Trash2 className="w-4 h-4 mr-2" /> {clearItemDrawingMutation.isPending ? "Removing..." : "Remove Drawing"}
                     </Button>
                   )}
                 </div>
-                {isEditMode && removeDrawing && (
-                  <span className="text-xs text-red-600">Drawing will be removed on save</span>
+                {isEditMode && drawingCleared && (
+                  <span className="text-xs text-red-600">Drawing removed</span>
                 )}
-                {isEditMode && !removeDrawing && (drawingFile || itemData?.drawing_file_name || itemData?.drawing_url) && (
+                {isEditMode && !drawingCleared && (drawingFile || itemData?.drawing_file_name || itemData?.drawing_url) && (
                   <span className="max-w-56 truncate text-xs text-gray-500" title={drawingFile?.name || itemData?.drawing_file_name || itemData?.drawing_url || ""}>
                     {drawingFile ? drawingFile.name : itemData?.drawing_file_name || "Drawing saved"}
                   </span>

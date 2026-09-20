@@ -2459,3 +2459,43 @@ export function useUpdateItem() {
     },
   });
 }
+
+// Immediately clears the stored drawing reference for an item. Kept separate
+// from useUpdateItem because that path runs normalizeItemInput, which collapses
+// empty strings to undefined and would therefore never clear the columns.
+export function useClearItemDrawing() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (itemNo: string): Promise<Item> => {
+      const cleanedItemNo = cleanItemNo(itemNo);
+      if (isSupabaseConfigured) {
+        const rows = await supabaseFetch<Item[]>(
+          `ct_items?item_no=eq.${eqFilter(cleanedItemNo)}`,
+          {
+            method: "PATCH",
+            prefer: "return=representation",
+            body: JSON.stringify({ drawing_url: null, drawing_file_name: null, drawing_content_type: null }),
+          }
+        );
+        const item = rows[0];
+        if (!item) throw new Error("Item not found or this login cannot update item master");
+        return item;
+      }
+
+      const items = getItems();
+      const idx = items.findIndex((entry) => entry.item_no === cleanedItemNo);
+      if (idx === -1) throw new Error("Item not found");
+      items[idx] = { ...items[idx], drawing_url: "", drawing_file_name: "", drawing_content_type: "" };
+      setItems(items);
+      return items[idx];
+    },
+    onSuccess: (item) => {
+      queryClient.setQueryData(getGetItemQueryKey(cleanItemNo(item.item_no)), item);
+      queryClient.setQueryData<{ items: Item[] }>(["items"], (current) =>
+        current
+          ? { items: current.items.map((entry) => (entry.item_no === item.item_no ? item : entry)) }
+          : current
+      );
+    },
+  });
+}
