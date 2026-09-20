@@ -101,6 +101,11 @@ export default function WorkOrder({
   const lastSuggestedTiNoRef = useRef("");
   const lastAutoSrNoRef = useRef("");
   const srNoManuallyEditedRef = useRef(false);
+  const lastAutoOrderDetailsRef = useRef<{ customer: string; po_no: string; po_date: string }>({
+    customer: "",
+    po_no: "",
+    po_date: "",
+  });
   const isSaving = createWorkOrderMutation.isPending || updateWorkOrderMutation.isPending;
 
   const sortedRecords = useMemo(
@@ -226,6 +231,39 @@ export default function WorkOrder({
     );
   }, [currentRecordId, formData.qty, formData.sr_no, isFormEnabled, masterItemData, records]);
 
+  // Prefill Customer / PO No. / PO Date from the latest record that shares the
+  // entered Work Order number. New work orders with no past records stay blank.
+  // Only auto-filled values are updated, so manual entries are never clobbered.
+  useEffect(() => {
+    if (currentRecordId) return;
+    const source = getLatestWorkOrderOrderDetails(records, formData.work_order);
+    setFormData((current) => {
+      const next = { ...current };
+      let changed = false;
+      (["customer", "po_no", "po_date"] as const).forEach((field) => {
+        const preferred = source?.[field] || "";
+        const currentValue = current[field].trim();
+        const lastAuto = lastAutoOrderDetailsRef.current[field];
+        if (preferred) {
+          const shouldFill =
+            (!lastAuto && !currentValue) ||
+            (Boolean(lastAuto) && currentValue === lastAuto && currentValue !== preferred);
+          if (shouldFill) {
+            next[field] = preferred;
+            lastAutoOrderDetailsRef.current[field] = preferred;
+            changed = true;
+          }
+        } else if (lastAuto && currentValue === lastAuto) {
+          // Switched to a work order with no match: clear the value we filled.
+          next[field] = "";
+          lastAutoOrderDetailsRef.current[field] = "";
+          changed = true;
+        }
+      });
+      return changed ? next : current;
+    });
+  }, [currentRecordId, formData.work_order, formData.customer, formData.po_no, formData.po_date, records]);
+
   const handleNew = () => {
     if (!userCanWrite) {
       toast({ title: "Not allowed", description: "Only User role can create or edit Work Orders." });
@@ -243,6 +281,7 @@ export default function WorkOrder({
     pendingSpecificationRefreshRef.current = false;
     lastAutoSrNoRef.current = "";
     srNoManuallyEditedRef.current = false;
+    lastAutoOrderDetailsRef.current = { customer: "", po_no: "", po_date: "" };
   };
 
   const handleSave = async () => {
@@ -309,6 +348,7 @@ export default function WorkOrder({
       lastSuggestedTiNoRef.current = "";
       lastAutoSrNoRef.current = "";
       srNoManuallyEditedRef.current = Boolean(savedRecord.sr_no?.trim());
+      lastAutoOrderDetailsRef.current = { customer: "", po_no: "", po_date: "" };
       toast({ title: currentRecordId ? "Work Order updated" : "Work Order saved" });
     } catch (error) {
       toast({
@@ -343,6 +383,7 @@ export default function WorkOrder({
     lastSuggestedTiNoRef.current = "";
     lastAutoSrNoRef.current = "";
     srNoManuallyEditedRef.current = Boolean(record.sr_no?.trim());
+    lastAutoOrderDetailsRef.current = { customer: "", po_no: "", po_date: "" };
   };
 
   const handlePrevious = () => {
@@ -1079,6 +1120,29 @@ function getLatestWorkOrderSpecificationForItem(
     .sort((a, b) =>
       (b.updated_at || b.created_at || "").localeCompare(a.updated_at || a.created_at || "")
     )[0]?.specification?.trim() || "";
+}
+
+// Customer / PO No. / PO Date from the most recent record sharing this work
+// order number (case-insensitive match). Returns null when there is no prior
+// record, so a brand-new work order leaves those fields blank.
+function getLatestWorkOrderOrderDetails(records: WorkOrderRecord[], workOrder?: string | null) {
+  const normalizedWorkOrder = cleanWorkOrderValue(workOrder).toLowerCase();
+  if (!normalizedWorkOrder) return null;
+
+  const match = [...records]
+    .filter(
+      (record) => cleanWorkOrderValue(record.work_order).toLowerCase() === normalizedWorkOrder
+    )
+    .sort((a, b) =>
+      (b.updated_at || b.created_at || "").localeCompare(a.updated_at || a.created_at || "")
+    )[0];
+  if (!match) return null;
+
+  return {
+    customer: cleanWorkOrderValue(match.customer),
+    po_no: cleanWorkOrderValue(match.po_no),
+    po_date: cleanWorkOrderValue(match.po_date),
+  };
 }
 
 function cleanSpecificationValue(value?: string | null) {
