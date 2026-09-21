@@ -786,13 +786,11 @@ function WorkOrderNumberField({
         {required && <span className="ml-0.5 text-red-500">*</span>}
       </Label>
       <div
-        className={`flex h-9 items-stretch overflow-hidden rounded-md border border-gray-300 bg-gray-50 focus-within:ring-2 focus-within:ring-[#4a6fa5] ${
+        className={`flex h-9 items-center rounded-md border border-gray-300 bg-gray-50 px-3 text-sm text-gray-900 focus-within:ring-2 focus-within:ring-[#4a6fa5] ${
           disabled ? "opacity-90" : ""
         }`}
       >
-        <span className="flex items-center border-r border-gray-200 bg-gray-100 px-2.5 text-sm font-medium text-gray-500 select-none">
-          CT-PT/
-        </span>
+        <span className="select-none">CT-PT/</span>
         <input
           type="text"
           inputMode="numeric"
@@ -806,11 +804,10 @@ function WorkOrderNumberField({
           }}
           data-work-order-field
           data-work-order-name="work_order"
-          className="min-w-0 flex-1 bg-transparent px-2 text-center text-sm outline-none placeholder:text-gray-400 disabled:text-gray-900"
+          style={{ width: `${Math.max((seq || seqPlaceholder || "").length, 3)}ch` }}
+          className="bg-transparent text-center outline-none placeholder:text-gray-400 disabled:text-gray-900"
         />
-        <span className="flex items-center border-l border-gray-200 bg-gray-100 pl-2 text-sm font-medium text-gray-500 select-none">
-          /
-        </span>
+        <span className="select-none">/</span>
         <input
           type="text"
           value={fiscalYear}
@@ -821,7 +818,8 @@ function WorkOrderNumberField({
           }}
           title="Fiscal year (editable)"
           aria-label="Fiscal year"
-          className="w-16 bg-gray-100 pr-2 text-sm text-gray-600 outline-none disabled:text-gray-900"
+          style={{ width: `${Math.max(fiscalYear.length, 5)}ch` }}
+          className="bg-transparent outline-none disabled:text-gray-900"
         />
       </div>
     </div>
