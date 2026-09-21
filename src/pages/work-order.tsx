@@ -619,7 +619,6 @@ export default function WorkOrder({
                         disabled={!isFormEnabled || isFieldTiLocked("work_order")}
                         defaultFiscalYear={currentFiscalYear}
                         seqPlaceholder={nextWorkOrderSequence}
-                        hint={nextWorkOrderNumber}
                         onChange={(value) => updateField("work_order", value)}
                       />
                     ) : (
@@ -750,7 +749,6 @@ function WorkOrderNumberField({
   required,
   defaultFiscalYear,
   seqPlaceholder,
-  hint,
 }: {
   label: string;
   value: string;
@@ -759,7 +757,6 @@ function WorkOrderNumberField({
   required?: boolean;
   defaultFiscalYear: string;
   seqPlaceholder?: string;
-  hint?: string;
 }) {
   const [seq, setSeq] = useState("");
   const [fiscalYear, setFiscalYear] = useState(defaultFiscalYear);
@@ -827,9 +824,6 @@ function WorkOrderNumberField({
           className="w-16 bg-gray-100 pr-2 text-sm text-gray-600 outline-none disabled:text-gray-900"
         />
       </div>
-      {!seq && hint && (
-        <p className="text-xs text-gray-400">Suggested next: {hint}</p>
-      )}
     </div>
   );
 }
