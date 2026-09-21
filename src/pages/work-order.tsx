@@ -116,9 +116,13 @@ export default function WorkOrder({
     [records]
   );
   const distinctCustomers = useMemo(() => getDistinctWorkOrderValues(records, "customer"), [records]);
-  const distinctWorkOrders = useMemo(() => getDistinctWorkOrderValues(records, "work_order"), [records]);
   const distinctPoNos = useMemo(() => getDistinctWorkOrderValues(records, "po_no"), [records]);
   const nextWorkOrderNumber = useMemo(() => getNextWorkOrderNumber(records), [records]);
+  const currentFiscalYear = useMemo(() => getFiscalYearLabel(new Date()), []);
+  const nextWorkOrderSequence = useMemo(
+    () => nextWorkOrderNumber.match(/^CT-PT\/(\d+)\//i)?.[1] || "",
+    [nextWorkOrderNumber]
+  );
 
   const currentIndex = currentRecordId
     ? sortedRecords.findIndex((record) => record.id === currentRecordId)
@@ -605,40 +609,45 @@ export default function WorkOrder({
               <section>
                 <SectionHeader title="Order Details" />
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                  {ORDER_FIELDS.map((field) => (
-                    <WorkOrderField
-                      key={field.name}
-                      fieldName={field.name}
-                      label={field.label}
-                      value={formData[field.name]}
-                      type={field.type}
-                      required={field.required}
-                      disabled={!isFormEnabled || isFieldTiLocked(field.name)}
-                      suggestions={
-                        field.name === "customer"
-                          ? distinctCustomers
-                          : field.name === "work_order"
-                            ? distinctWorkOrders
+                  {ORDER_FIELDS.map((field) =>
+                    field.name === "work_order" ? (
+                      <WorkOrderNumberField
+                        key={field.name}
+                        label={field.label}
+                        required={field.required}
+                        value={formData.work_order}
+                        disabled={!isFormEnabled || isFieldTiLocked("work_order")}
+                        defaultFiscalYear={currentFiscalYear}
+                        seqPlaceholder={nextWorkOrderSequence}
+                        onChange={(value) => updateField("work_order", value)}
+                      />
+                    ) : (
+                      <WorkOrderField
+                        key={field.name}
+                        fieldName={field.name}
+                        label={field.label}
+                        value={formData[field.name]}
+                        type={field.type}
+                        required={field.required}
+                        disabled={!isFormEnabled || isFieldTiLocked(field.name)}
+                        suggestions={
+                          field.name === "customer"
+                            ? distinctCustomers
                             : field.name === "po_no"
                               ? distinctPoNos
                               : undefined
-                      }
-                      suggestionMode={
-                        field.name === "customer"
-                          ? "autocomplete"
-                          : field.name === "work_order" || field.name === "po_no"
-                            ? "suggestion"
-                            : "none"
-                      }
-                      placeholder={
-                        field.name === "work_order" && nextWorkOrderNumber
-                          ? nextWorkOrderNumber
-                          : undefined
-                      }
-                      formatValue={field.name === "work_order" ? expandWorkOrderNumberInput : undefined}
-                      onChange={(value) => updateField(field.name, value)}
-                    />
-                  ))}
+                        }
+                        suggestionMode={
+                          field.name === "customer"
+                            ? "autocomplete"
+                            : field.name === "po_no"
+                              ? "suggestion"
+                              : "none"
+                        }
+                        onChange={(value) => updateField(field.name, value)}
+                      />
+                    )
+                  )}
                 </div>
               </section>
 
@@ -725,6 +734,96 @@ export default function WorkOrder({
           setIsAddItemModalOpen(false);
         }}
       />
+    </div>
+  );
+}
+
+// Segmented Work Order number input: fixed "CT-PT/" prefix, an editable serial
+// in the middle, and an editable fiscal-year suffix pre-filled with the current
+// year. The full "CT-PT/<serial>/<fy>" string is emitted through onChange.
+function WorkOrderNumberField({
+  label,
+  value,
+  onChange,
+  disabled,
+  required,
+  defaultFiscalYear,
+  seqPlaceholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  required?: boolean;
+  defaultFiscalYear: string;
+  seqPlaceholder?: string;
+}) {
+  const [seq, setSeq] = useState("");
+  const [fiscalYear, setFiscalYear] = useState(defaultFiscalYear);
+
+  useEffect(() => {
+    const parsed = value.match(/^CT-PT\/(\d*)\/(.*)$/i);
+    if (parsed) {
+      setSeq(parsed[1]);
+      setFiscalYear(parsed[2]);
+    } else if (/^\d+$/.test(value.trim())) {
+      setSeq(value.trim());
+    } else if (!value.trim()) {
+      setSeq("");
+      setFiscalYear(defaultFiscalYear);
+    }
+  }, [value, defaultFiscalYear]);
+
+  const emit = (nextSeq: string, nextFiscalYear: string) => {
+    const cleanedSeq = nextSeq.replace(/\D/g, "");
+    onChange(cleanedSeq ? `CT-PT/${cleanedSeq}/${nextFiscalYear.trim()}` : "");
+  };
+
+  return (
+    <div className="space-y-1">
+      <Label className="text-xs font-semibold uppercase tracking-wider text-gray-600">
+        {label}
+        {required && <span className="ml-0.5 text-red-500">*</span>}
+      </Label>
+      <div
+        className={`flex h-9 items-stretch overflow-hidden rounded-md border border-gray-300 bg-gray-50 focus-within:ring-2 focus-within:ring-[#4a6fa5] ${
+          disabled ? "opacity-90" : ""
+        }`}
+      >
+        <span className="flex items-center border-r border-gray-200 bg-gray-100 px-2.5 text-sm font-medium text-gray-500 select-none">
+          CT-PT/
+        </span>
+        <input
+          type="text"
+          inputMode="numeric"
+          value={seq}
+          placeholder={seqPlaceholder}
+          disabled={disabled}
+          onChange={(event) => {
+            const digits = event.target.value.replace(/\D/g, "");
+            setSeq(digits);
+            emit(digits, fiscalYear);
+          }}
+          data-work-order-field
+          data-work-order-name="work_order"
+          className="min-w-0 flex-1 bg-transparent px-2 text-center text-sm outline-none disabled:text-gray-900"
+        />
+        <span className="flex items-center border-l border-gray-200 bg-gray-100 pl-2 text-sm font-medium text-gray-500 select-none">
+          /
+        </span>
+        <input
+          type="text"
+          value={fiscalYear}
+          disabled={disabled}
+          onChange={(event) => {
+            setFiscalYear(event.target.value);
+            emit(seq, event.target.value);
+          }}
+          title="Fiscal year (editable)"
+          aria-label="Fiscal year"
+          className="w-16 bg-gray-100 pr-2 text-sm text-gray-600 outline-none disabled:text-gray-900"
+        />
+      </div>
     </div>
   );
 }
@@ -1179,15 +1278,6 @@ function compareWorkOrderRecordsByTiNo(a: WorkOrderRecord, b: WorkOrderRecord): 
     return aTi ? -1 : 1;
   }
   return (a.created_at || "").localeCompare(b.created_at || "");
-}
-
-// Expand a bare serial the user typed (e.g. "374") into the full work order
-// number CT-PT/374/<current fiscal year>. Anything that is not purely digits is
-// left untouched, so a already-complete number typed by hand is preserved.
-function expandWorkOrderNumberInput(value: string, date = new Date()): string {
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) return trimmed;
-  return `CT-PT/${trimmed}/${getFiscalYearLabel(date)}`;
 }
 
 // Fiscal year label (1 Apr – 31 Mar), e.g. 2026-09 -> "26-27", 2027-02 -> "26-27".
