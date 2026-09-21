@@ -619,6 +619,7 @@ export default function WorkOrder({
                         disabled={!isFormEnabled || isFieldTiLocked("work_order")}
                         defaultFiscalYear={currentFiscalYear}
                         seqPlaceholder={nextWorkOrderSequence}
+                        hint={nextWorkOrderNumber}
                         onChange={(value) => updateField("work_order", value)}
                       />
                     ) : (
@@ -749,6 +750,7 @@ function WorkOrderNumberField({
   required,
   defaultFiscalYear,
   seqPlaceholder,
+  hint,
 }: {
   label: string;
   value: string;
@@ -757,6 +759,7 @@ function WorkOrderNumberField({
   required?: boolean;
   defaultFiscalYear: string;
   seqPlaceholder?: string;
+  hint?: string;
 }) {
   const [seq, setSeq] = useState("");
   const [fiscalYear, setFiscalYear] = useState(defaultFiscalYear);
@@ -806,7 +809,7 @@ function WorkOrderNumberField({
           }}
           data-work-order-field
           data-work-order-name="work_order"
-          className="min-w-0 flex-1 bg-transparent px-2 text-center text-sm outline-none disabled:text-gray-900"
+          className="min-w-0 flex-1 bg-transparent px-2 text-center text-sm outline-none placeholder:text-gray-400 disabled:text-gray-900"
         />
         <span className="flex items-center border-l border-gray-200 bg-gray-100 pl-2 text-sm font-medium text-gray-500 select-none">
           /
@@ -824,6 +827,9 @@ function WorkOrderNumberField({
           className="w-16 bg-gray-100 pr-2 text-sm text-gray-600 outline-none disabled:text-gray-900"
         />
       </div>
+      {!seq && hint && (
+        <p className="text-xs text-gray-400">Suggested next: {hint}</p>
+      )}
     </div>
   );
 }
