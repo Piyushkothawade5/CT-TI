@@ -83,22 +83,26 @@ function getNextWorkOrderSerialSequence(
   yearMonth: string,
   currentRecordId?: string | null
 ): number {
+  // Scope the running sequence to the YEAR (YY), so it continues across months
+  // within the same year and only resets when the year changes.
+  const year = yearMonth.slice(0, 2);
   const maxSequence = records.reduce((max, record) => {
     if (currentRecordId && record.id === currentRecordId) return max;
-    return Math.max(max, getMaxSerialSequence(record.sr_no, yearMonth));
+    return Math.max(max, getMaxSerialSequence(record.sr_no, year));
   }, 0);
 
   return maxSequence + 1;
 }
 
-function getMaxSerialSequence(serialRange?: string | null, yearMonth?: string): number {
+function getMaxSerialSequence(serialRange?: string | null, year?: string): number {
   const serialText = String(serialRange || "");
   const pattern = /(\d{4})(?:00)?[A-Z]{3}(\d{5,})/gi;
   let maxSequence = 0;
   let match: RegExpExecArray | null;
 
   while ((match = pattern.exec(serialText)) !== null) {
-    if (yearMonth && match[1] !== yearMonth) continue;
+    // match[1] is the serial's YYMM; compare only its year (YY) portion.
+    if (year && match[1].slice(0, 2) !== year) continue;
     const sequence = Number(match[2]);
     if (Number.isFinite(sequence)) maxSequence = Math.max(maxSequence, sequence);
   }
