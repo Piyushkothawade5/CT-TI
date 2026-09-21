@@ -374,25 +374,38 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
                   {drawingFile ? (
                     <Button
                       type="button"
-                      variant="outline"
+                      variant="ghost"
+                      size="icon"
                       onClick={handleClearStagedDrawing}
-                      className="border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700"
                       title="Remove the attached drawing"
                     >
-                      <Trash2 className="w-4 h-4 mr-2" /> Remove Drawing
+                      <Trash2 className="w-4 h-4" />
                     </Button>
                   ) : isEditMode && !drawingCleared && (itemData?.drawing_url || itemData?.drawing_file_name) ? (
                     <Button
                       type="button"
-                      variant="outline"
+                      variant="ghost"
+                      size="icon"
                       onClick={handleRemoveDrawing}
                       disabled={clearItemDrawingMutation.isPending}
-                      className="border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700"
                       title="Delete the drawing from this item"
                     >
-                      <Trash2 className="w-4 h-4 mr-2" /> {clearItemDrawingMutation.isPending ? "Removing..." : "Remove Drawing"}
+                      <Trash2 className="w-4 h-4" />
                     </Button>
                   ) : null}
+                  {!isEditMode && drawingFile && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setIsDrawingPanelOpen((visible) => !visible)}
+                      title={isDrawingPanelOpen ? "Hide drawing panel" : "Show drawing panel"}
+                    >
+                      {isDrawingPanelOpen
+                        ? <PanelRightClose className="w-4 h-4" />
+                        : <PanelRightOpen className="w-4 h-4" />}
+                    </Button>
+                  )}
                 </div>
                 {isEditMode && drawingCleared && (
                   <span className="text-xs text-red-600">Drawing removed</span>
@@ -404,18 +417,6 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
                 )}
               </div>
             </>
-            {!isEditMode && drawingFile && (
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => setIsDrawingPanelOpen((visible) => !visible)}
-                title={isDrawingPanelOpen ? "Hide drawing panel" : "Show drawing panel"}
-              >
-                {isDrawingPanelOpen
-                  ? <PanelRightClose className="w-4 h-4" />
-                  : <PanelRightOpen className="w-4 h-4" />}
-              </Button>
-            )}
           </div>
         </DialogHeader>
 
