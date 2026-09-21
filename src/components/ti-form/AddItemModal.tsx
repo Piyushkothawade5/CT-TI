@@ -157,6 +157,14 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
     }
   }, [cleanedItemNo, isEditMode, open]);
 
+  // Discards a drawing that is only staged (a picked file not yet uploaded) —
+  // used when creating a new item, or when a replacement file was chosen in edit.
+  const handleClearStagedDrawing = () => {
+    setDrawingFile(null);
+    setIsDrawingPanelOpen(false);
+    if (drawingInputRef.current) drawingInputRef.current.value = "";
+  };
+
   const handleRemoveDrawing = async () => {
     if (isSavingItem || clearItemDrawingMutation.isPending) return;
     if (!window.confirm("Delete the uploaded drawing for this item? This cannot be undone.")) return;
@@ -363,7 +371,17 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
                   <Button type="button" variant="outline" onClick={() => drawingInputRef.current?.click()} className="border-[#4a6fa5] text-[#2a4080]">
                     <FileUp className="w-4 h-4 mr-2" /> {drawingFile ? "Change Drawing" : isEditMode && itemData?.drawing_url && !drawingCleared ? "Change Drawing" : "Attach Drawing"}
                   </Button>
-                  {isEditMode && !drawingFile && !drawingCleared && (itemData?.drawing_url || itemData?.drawing_file_name) && (
+                  {drawingFile ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleClearStagedDrawing}
+                      className="border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700"
+                      title="Remove the attached drawing"
+                    >
+                      <Trash2 className="w-4 h-4 mr-2" /> Remove Drawing
+                    </Button>
+                  ) : isEditMode && !drawingCleared && (itemData?.drawing_url || itemData?.drawing_file_name) ? (
                     <Button
                       type="button"
                       variant="outline"
@@ -374,7 +392,7 @@ export function AddItemModal({ open, onOpenChange, itemNo, itemData, mode = "cre
                     >
                       <Trash2 className="w-4 h-4 mr-2" /> {clearItemDrawingMutation.isPending ? "Removing..." : "Remove Drawing"}
                     </Button>
-                  )}
+                  ) : null}
                 </div>
                 {isEditMode && drawingCleared && (
                   <span className="text-xs text-red-600">Drawing removed</span>
