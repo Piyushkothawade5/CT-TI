@@ -83,31 +83,42 @@ function getNextWorkOrderSerialSequence(
   yearMonth: string,
   currentRecordId?: string | null
 ): number {
-  // Scope the running sequence to the YEAR (YY), so it continues across months
-  // within the same year and only resets when the year changes.
-  const year = yearMonth.slice(0, 2);
+  // Scope the running sequence to the FISCAL YEAR (Apr–Mar), so it continues
+  // across all months of a fiscal year and only resets in April of the next.
+  const fiscalYearStart = fiscalYearStartFromYearMonth(yearMonth);
   const maxSequence = records.reduce((max, record) => {
     if (currentRecordId && record.id === currentRecordId) return max;
-    return Math.max(max, getMaxSerialSequence(record.sr_no, year));
+    return Math.max(max, getMaxSerialSequence(record.sr_no, fiscalYearStart));
   }, 0);
 
   return maxSequence + 1;
 }
 
-function getMaxSerialSequence(serialRange?: string | null, year?: string): number {
+function getMaxSerialSequence(serialRange?: string | null, fiscalYearStart?: string): number {
   const serialText = String(serialRange || "");
   const pattern = /(\d{4})(?:00)?[A-Z]{3}(\d{5,})/gi;
   let maxSequence = 0;
   let match: RegExpExecArray | null;
 
   while ((match = pattern.exec(serialText)) !== null) {
-    // match[1] is the serial's YYMM; compare only its year (YY) portion.
-    if (year && match[1].slice(0, 2) !== year) continue;
+    // match[1] is the serial's YYMM; keep only serials in the same fiscal year.
+    if (fiscalYearStart && fiscalYearStartFromYearMonth(match[1]) !== fiscalYearStart) continue;
     const sequence = Number(match[2]);
     if (Number.isFinite(sequence)) maxSequence = Math.max(maxSequence, sequence);
   }
 
   return maxSequence;
+}
+
+// The starting year (YY) of the fiscal year (1 Apr – 31 Mar) that a YYMM prefix
+// falls in. Apr–Dec use their own year; Jan–Mar belong to the previous year.
+// e.g. "2609" -> "26", "2701" -> "26", "2604" -> "26", "2603" -> "25".
+function fiscalYearStartFromYearMonth(yearMonth: string): string {
+  const yy = Number(yearMonth.slice(0, 2));
+  const mm = Number(yearMonth.slice(2, 4));
+  if (!Number.isFinite(yy) || !Number.isFinite(mm)) return "";
+  const startYear = mm >= 4 ? yy : (yy - 1 + 100) % 100;
+  return String(startYear).padStart(2, "0");
 }
 
 function formatSerialYearMonth(date: Date): string {
