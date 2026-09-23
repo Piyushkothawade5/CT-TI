@@ -195,6 +195,7 @@ export default function Home({
   const [rejectionItems, setRejectionItems] = useState<RejectionItem[]>([]);
   const pendingItemFocusRef = useRef<string | null>(null);
   const pendingSearchEditRef = useRef<string | null>(null);
+  const loadedTiNoRef = useRef<string | null>(null);
   const lastCoreColumnRef = useRef("2");
 
   // â”€â”€ Distinct value hooks for dropdowns â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -364,45 +365,61 @@ export default function Home({
   }, [activeItemNo, isNonStandardItem, toast]);
 
   useEffect(() => {
-    if (tiRecordData) {
-      if (viewerOnlyChecked && (tiRecordData.approval_status || "pending_check") !== "checked") {
-        pendingSearchEditRef.current = null;
-        setCurrentTiNo(null);
-        setEditedTiNo("");
-        setItemNoInput("");
-        setActiveItemNo("");
-        setRejectionItems([]);
-        form.reset({
-          ti_date: todayLocalIso(),
-          item_no: "",
-          approval_status: "pending_check",
-          approved_by: "",
-          checked_by: "",
-          created_by: profile.initials,
-          created_by_user_id: profile.id,
-          rejection_items: [],
-        });
-        toast({
-          variant: "destructive",
-          title: "Viewer access limited",
-          description: "Viewer role can only open checked TIs.",
-        });
-        return;
-      }
+    // Nothing open — New mode, or another TI still loading. Whatever arrives next
+    // counts as a fresh load, including a TI this session already opened once.
+    if (!tiRecordData) {
+      loadedTiNoRef.current = null;
+      return;
+    }
+
+    if (viewerOnlyChecked && (tiRecordData.approval_status || "pending_check") !== "checked") {
+      pendingSearchEditRef.current = null;
+      setCurrentTiNo(null);
+      setEditedTiNo("");
+      setItemNoInput("");
+      setActiveItemNo("");
+      setRejectionItems([]);
+      form.reset({
+        ti_date: todayLocalIso(),
+        item_no: "",
+        approval_status: "pending_check",
+        approved_by: "",
+        checked_by: "",
+        created_by: profile.initials,
+        created_by_user_id: profile.id,
+        rejection_items: [],
+      });
+      toast({
+        variant: "destructive",
+        title: "Viewer access limited",
+        description: "Viewer role can only open checked TIs.",
+      });
+      return;
+    }
+    const cachedItemData =
+      (allItemsData?.items || []).find((item) => item.item_no === (tiRecordData.item_no || "")) ||
+      (itemData?.item_no === (tiRecordData.item_no || "") ? itemData : null);
+    // Opening a TI is a one-shot, but this effect re-runs whenever the item
+    // master arrives or the item list refetches (which react-query does on every
+    // window focus). Repeating the block below on those runs would undo what the
+    // load set up: the Edit button in the search modal hands the TI number over
+    // in pendingSearchEditRef, so a second run — with the ref already consumed —
+    // computed false and switched edit mode straight back off. It would also drop
+    // a checker's unsaved correction marks. Every mutation handler sets these
+    // itself, so nothing depends on them being reapplied here.
+    if (loadedTiNoRef.current !== tiRecordData.ti_no) {
+      loadedTiNoRef.current = tiRecordData.ti_no;
       const shouldOpenInEditMode = pendingSearchEditRef.current === tiRecordData.ti_no;
-      const cachedItemData =
-        (allItemsData?.items || []).find((item) => item.item_no === (tiRecordData.item_no || "")) ||
-        (itemData?.item_no === (tiRecordData.item_no || "") ? itemData : null);
       pendingSearchEditRef.current = null;
       setQueuedWorkOrderId(null);
       setIsNewMode(false);
       setIsEditMode(shouldOpenInEditMode);
-      setEditedTiNo(tiRecordData.ti_no);
-      setItemNoInput(tiRecordData.item_no || "");
-      setActiveItemNo(tiRecordData.item_no || "");
       setRejectionItems(normalizeRejectionItems(tiRecordData.rejection_items));
-      form.reset(mergeTiFormWithItemMaster(tiRecordData, cachedItemData));
     }
+    setEditedTiNo(tiRecordData.ti_no);
+    setItemNoInput(tiRecordData.item_no || "");
+    setActiveItemNo(tiRecordData.item_no || "");
+    form.reset(mergeTiFormWithItemMaster(tiRecordData, cachedItemData));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allItemsData?.items, itemData, profile.id, profile.initials, tiRecordData, toast, viewerOnlyChecked]);
 
