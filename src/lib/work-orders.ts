@@ -36,17 +36,23 @@ export function mergeTiFormWithItemMaster(
     pri_weight: item.pri_weight,
     sec_terminal: item.sec_terminal,
     total_weight: item.total_weight,
-    ref_ti: item.ref_ti,
+    // Ref TI belongs to the TI, not the item: the screen looks up the first TI
+    // issued for this item + customer and the user can override it, so a value the
+    // record already carries must survive the overlay. ct_items.ref_ti is the
+    // historical reference the item's spec came from, kept as the fallback for a TI
+    // that has none of its own (which is every record written before this changed).
+    ref_ti: current.ref_ti || item.ref_ti,
     customer_name: current.customer_name || historicCustomer || "",
   };
 }
 
-// The item-master (ct_items) columns the TI form edits in place — exactly the set
-// mergeTiFormWithItemMaster overlays onto the TI, minus item_no (the key the TI
-// points at, never renamed from this screen) and customer_name (a TI/work-order
-// field, not an item field). Keep the two lists in step: a column added to the
-// overlay above belongs here too, or the TI screen will show it and silently
-// refuse to save it back.
+// The item-master (ct_items) columns the TI form edits in place — the set
+// mergeTiFormWithItemMaster overlays onto the TI, minus the fields the TI owns:
+// item_no (the key the TI points at, never renamed from this screen),
+// customer_name (a TI/work-order field) and ref_ti (per TI + customer, so it has
+// no correct home in a per-item row — see the overlay above). Keep this in step
+// with the overlay: a column added there belongs here too, or the TI screen will
+// show it and silently refuse to save it back.
 export const TI_FORM_ITEM_MASTER_FIELDS = [
   "ct_type",
   "cust_part_code",
@@ -59,7 +65,6 @@ export const TI_FORM_ITEM_MASTER_FIELDS = [
   "ct_final_dim",
   "ga_drg",
   "ins_class",
-  "ref_ti",
   "pri_turns",
   "pri_copper",
   "former",

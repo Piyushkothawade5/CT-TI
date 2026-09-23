@@ -125,7 +125,6 @@ const ITEM_MASTER_FIELD_ROOTS = new Set<string>([
   "ct_final_dim",
   "ga_drg",
   "ins_class",
-  "ref_ti",
   "pri_turns",
   "pri_copper",
   "former",
@@ -282,6 +281,7 @@ export default function Home({
     () => getActiveItemDrawing(activeItemNo, itemNoInput, watchedItemNo, itemData, allItemsData?.items || []),
     [activeItemNo, allItemsData?.items, itemData, itemNoInput, watchedItemNo]
   );
+  const itemMasterRefTi = itemData?.ref_ti;
   const currentApprovalStatus = (watchedApprovalStatus || tiRecordData?.approval_status || "pending_check") as ApprovalStatus;
   const hasPersistedTiRecord = Boolean(currentTiNo);
   const { data: tiLabelStatus } = useTiLabelStatus(currentTiNo || "");
@@ -299,20 +299,25 @@ export default function Home({
     if (!activeDrawing) setIsDrawingViewerOpen(false);
   }, [activeDrawing]);
 
+  // Ref TI for a new TI: the first TI already issued for this item + customer, so
+  // the shop floor can refer back to it. Falls back to the item master's own
+  // reference when there is no earlier TI, which is also what the save path stores,
+  // so the box always shows the value that will actually be written to the record.
   useEffect(() => {
     let cancelled = false;
+    const fallbackRefTi = itemMasterRefTi || "";
     if (!isNewMode || !watchedItemNo || !watchedCustomerName) {
-      if (isNewMode) form.setValue("ref_ti", "");
+      if (isNewMode) form.setValue("ref_ti", fallbackRefTi);
       return;
     }
 
     const timer = window.setTimeout(() => {
       getFirstTiForItemCustomerAsync(watchedItemNo, watchedCustomerName)
         .then((firstTiNo) => {
-          if (!cancelled) form.setValue("ref_ti", firstTiNo);
+          if (!cancelled) form.setValue("ref_ti", firstTiNo || fallbackRefTi);
         })
         .catch(() => {
-          if (!cancelled) form.setValue("ref_ti", "");
+          if (!cancelled) form.setValue("ref_ti", fallbackRefTi);
         });
     }, 250);
 
@@ -320,7 +325,7 @@ export default function Home({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [form, isNewMode, watchedCustomerName, watchedItemNo]);
+  }, [form, isNewMode, itemMasterRefTi, watchedCustomerName, watchedItemNo]);
 
   // When item loads â€” populate fields + auto-fill customer from history
   useEffect(() => {
