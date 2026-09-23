@@ -32,7 +32,7 @@ import { AdminPanel } from "@/components/admin/AdminPanel";
 import { UnlockRequestsDialog } from "@/components/admin/UnlockRequestsDialog";
 import { ProfileTopBar } from "@/components/ProfileTopBar";
 import { buildItemTiFormatMap, getItemTiFormat, normalizeItemNo } from "@/lib/item-ti-compatibility";
-import { getPendingWorkOrderSummaryFromRecords, mapWorkOrderToTiDraft, mergeTiFormWithItemMaster } from "@/lib/work-orders";
+import { buildItemMasterUpdateFromTiForm, getPendingWorkOrderSummaryFromRecords, mapWorkOrderToTiDraft, mergeTiFormWithItemMaster } from "@/lib/work-orders";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 
 // â”€â”€ Signature persistence key (survives page reload / login) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -702,6 +702,7 @@ export default function Home({
         (allItemsData?.items || []).find((item) => normalizeItemNo(item.item_no) === normalizedDataItemNo) ||
         null;
       let nextMasterItem = currentMasterItem;
+      const dirtyTiFormFields = form.formState.dirtyFields as Record<string, unknown>;
 
       if (isRejected) {
         const correctedMasterItem = buildUpdatedMasterItemFromCorrections(currentMasterItem, rejectionItems);
@@ -721,6 +722,21 @@ export default function Home({
             data: correctedWorkOrder,
           });
         }
+      }
+
+      // Item-master fields are edited on this screen too (Electric Details, Core
+      // Particulars and the bottom grid all render ct_items columns), so push what
+      // the user changed straight into ct_items before the TI row is written.
+      // Without this the merge below re-overlays the stored master and the edit is
+      // lost — the item could only ever be changed from the Edit Item dialog.
+      const editedMasterItem = buildItemMasterUpdateFromTiForm(nextMasterItem, data, (path) =>
+        isDirtyFormPath(dirtyTiFormFields, path)
+      );
+      if (editedMasterItem) {
+        nextMasterItem = await updateItemMutation.mutateAsync({
+          itemNo: nextMasterItem?.item_no || editedMasterItem.item_no,
+          data: editedMasterItem,
+        });
       }
 
       const mergedFormData = nextMasterItem
@@ -1599,6 +1615,22 @@ function normalizeCorrectedRejectionValue(item: RejectionItem): string {
   }
 
   return String(item.corrected_value || "");
+}
+
+// react-hook-form tracks edits as a nested mirror of the form values
+// ({ core2: { burden_va: true } }), so walk the path a segment at a time. A field
+// only counts as edited when the user (or a calculation that opted in with
+// shouldDirty) changed it since the last form.reset — which is what reloads the
+// form from the item master, so "dirty" means "differs from the master because of
+// this editing session".
+function isDirtyFormPath(dirtyFields: Record<string, unknown> | undefined, path: string): boolean {
+  let cursor: unknown = dirtyFields;
+  for (const part of path.split(".")) {
+    if (cursor === true) return true;
+    if (!cursor || typeof cursor !== "object") return false;
+    cursor = (cursor as Record<string, unknown>)[part];
+  }
+  return cursor === true;
 }
 
 function isItemMasterCorrectionPath(path: string): boolean {

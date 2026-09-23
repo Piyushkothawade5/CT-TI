@@ -41,6 +41,103 @@ export function mergeTiFormWithItemMaster(
   };
 }
 
+// The item-master (ct_items) columns the TI form edits in place — exactly the set
+// mergeTiFormWithItemMaster overlays onto the TI, minus item_no (the key the TI
+// points at, never renamed from this screen) and customer_name (a TI/work-order
+// field, not an item field). Keep the two lists in step: a column added to the
+// overlay above belongs here too, or the TI screen will show it and silently
+// refuse to save it back.
+export const TI_FORM_ITEM_MASTER_FIELDS = [
+  "ct_type",
+  "cust_part_code",
+  "ratio",
+  "rated_voltage",
+  "stc",
+  "insulation_level",
+  "frequency",
+  "ref_std",
+  "ct_final_dim",
+  "ga_drg",
+  "ins_class",
+  "ref_ti",
+  "pri_turns",
+  "pri_copper",
+  "former",
+  "pri_length",
+  "pri_weight",
+  "sec_terminal",
+  "total_weight",
+] as const;
+
+export const TI_FORM_ITEM_MASTER_CORE_FIELDS = ["core1", "core2", "core3"] as const;
+
+type TiFormItemMasterField = (typeof TI_FORM_ITEM_MASTER_FIELDS)[number];
+type TiFormItemMasterCoreField = (typeof TI_FORM_ITEM_MASTER_CORE_FIELDS)[number];
+
+// The inverse of mergeTiFormWithItemMaster: carry the TI form's edits back onto
+// the item master so ct_items is updated by the TI screen itself, not only by the
+// separate Edit Item dialog. Without this the merge above re-overlays the stored
+// master on save and the edit is lost before it ever reaches either table.
+//
+// `isEdited` receives a TI form path ("ratio", "core2.burden_va") and answers
+// whether the user changed it in this editing session, so a field the screen only
+// auto-fills (Ref TI) or one carrying a stale value copied off an old TI record
+// never overwrites the master. Values are still compared against the master, so an
+// edit that ends up back at the stored value writes nothing. Returns the full
+// updated item, or null when nothing item-owned changed.
+export function buildItemMasterUpdateFromTiForm(
+  baseItem: ItemInput | null | undefined,
+  tiData: TiRecordInput,
+  isEdited: (path: string) => boolean
+): ItemInput | null {
+  if (!baseItem?.item_no) return null;
+
+  const nextItem: ItemInput = {
+    ...baseItem,
+    core1: { ...(baseItem.core1 || {}) },
+    core2: { ...(baseItem.core2 || {}) },
+    core3: { ...(baseItem.core3 || {}) },
+  };
+  let changed = false;
+
+  const readText = (source: Record<string, unknown>, key: string): string =>
+    typeof source[key] === "string" ? (source[key] as string) : "";
+
+  const applyChange = (
+    target: Record<string, unknown>,
+    source: Record<string, unknown>,
+    base: Record<string, unknown>,
+    key: string,
+    path: string
+  ) => {
+    if (!isEdited(path)) return;
+    const nextValue = readText(source, key);
+    if (nextValue === readText(base, key)) return;
+    target[key] = nextValue;
+    changed = true;
+  };
+
+  const nextItemFields = nextItem as unknown as Record<string, unknown>;
+  const tiDataFields = tiData as unknown as Record<string, unknown>;
+  const baseItemFields = baseItem as unknown as Record<string, unknown>;
+
+  TI_FORM_ITEM_MASTER_FIELDS.forEach((field: TiFormItemMasterField) => {
+    applyChange(nextItemFields, tiDataFields, baseItemFields, field, field);
+  });
+
+  TI_FORM_ITEM_MASTER_CORE_FIELDS.forEach((coreKey: TiFormItemMasterCoreField) => {
+    const formCore = tiData[coreKey] || {};
+    const baseCore = baseItem[coreKey] || {};
+    // Union of both sides so a core value the user cleared is written back as ""
+    // and actually removed from the master, not just dropped from the TI.
+    new Set([...Object.keys(formCore), ...Object.keys(baseCore)]).forEach((key) => {
+      applyChange(nextItem[coreKey]!, formCore, baseCore, key, `${coreKey}.${key}`);
+    });
+  });
+
+  return changed ? nextItem : null;
+}
+
 export type WorkOrderFormData = {
   work_order: string;
   customer: string;
